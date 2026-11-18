@@ -6,7 +6,7 @@ const money=v=>'R$ '+Number(v||0).toFixed(2).replace('.',',');
 const FREE=['gelo','agua','agua gelada'];
 const CATS=['Refrescantes','Fortes','Cítricos','Tropicais','Doces & Frutados','Aperitivos'];
 const EMO=['🍋','🥃','🍊','🍹','🍓','🥂'];
-const S={user:null,bars:[],bar:null,items:[],recipes:[],prices:{},orders:[],tab:'recipes',sub:null,filter:'now',cat:'Todas',q:'',icat:'Destilados',cq:'',fo:false,open:{}};
+const S={user:null,bars:[],bar:null,items:[],recipes:[],prices:{},orders:[],tab:'recipes',sub:null,filter:'now',cat:'Todas',q:'',icat:'Destilados',cq:'',fo:false,open:{},admin:false,pf:'none',pmk:false,psel:new Set(),pc:'Todas',pn:100,eq:'',esel:null};
 const stock=()=>new Set(S.items.filter(i=>i.in_stock).map(i=>norm(i.name)));
 const missing=r=>{const st=stock();return (r.ingredients||[]).filter(i=>!FREE.includes(norm(i.n))&&!st.has(norm(i.n)))};
 const tile=r=>`<div class="im c${Math.max(0,CATS.indexOf(r.category))}" style="${r.image_url?`background-image:url('${esc(r.image_url)}')`:''}">${r.image_url?'':EMO[CATS.indexOf(r.category)]||'🍸'}</div>`;
@@ -21,7 +21,7 @@ function toast(t){const d=document.createElement('div');d.className='toast';d.te
 async function boot(){
   const {data:{session}}=await sb.auth.getSession();
   if(!session){S.user=null;return authView()}
-  S.user=session.user;
+  S.user=session.user;try{const a=await sb.from('admins').select('user_id').eq('user_id',S.user.id);S.admin=!!(a.data&&a.data.length)}catch(e){S.admin=false}
   const [b,r]=await Promise.all([sb.from('bars').select('*').order('created_at'),sb.from('recipes').select('*').order('name')]);
   S.bars=b.data||[];S.recipes=r.data||[];
   S.bar=S.bars.find(x=>x.id===localStorage.getItem('bar'))||S.bars[0]||null;
@@ -82,9 +82,10 @@ function overlay(r,k,lot){
   const notes=lot?[...new Set(lot.orders.map(x=>x.note).filter(Boolean))]:[];
   const meta=[['Copo',r.glass],['Técnica',r.technique],['Decoração',r.garnish]].filter(x=>x[1]);
   o.innerHTML=`<div class="hero c${Math.max(0,CATS.indexOf(r.category))}" style="${r.image_url?`background-image:url('${esc(r.image_url)}')`:''}">${r.image_url?'':EMO[CATS.indexOf(r.category)]||'🍸'}</div><div class="w">
-  <button class="b g" id="x">← Voltar</button><h1 style="margin-top:16px">${k>1?k+'× ':''}${esc(r.name)}</h1>
+  <div class="row sp"><button class="b g" id="x">← Voltar</button>${!lot&&canEdit(r)?'<button class="b g" id="ed">✏️ Editar</button>':''}</div><h1 style="margin-top:16px">${k>1?k+'× ':''}${esc(r.name)}</h1>
   <p class="mu">${lot?esc(join(names(lot.orders)))+(lot.sh?' · coqueteleira '+lot.sh+' ml':''):esc(r.category)}</p>
   ${notes.length?`<p style="margin-top:10px;color:var(--ac);font-weight:600">Obs: ${esc(notes.join(' / '))}</p>`:''}
+  ${r.verified&&!lot?`<p class="vf">✓ Receita verificada em ${(r.sources||'').split(',').filter(Boolean).length||5}+ fontes</p>`:''}
   ${k>1?`<div class="dose"><b>${k} doses juntas</b><span>Os valores abaixo são o total para ${k}. Cada dose é a receita original.</span></div>`:''}
   ${meta.length?`<div class="meta">${meta.map(x=>`<div><span>${x[0]}</span><b>${esc(x[1])}</b></div>`).join('')}</div>`:''}
   <h2 style="margin:22px 0 10px">Ingredientes</h2>${(r.ingredients||[]).map(i=>{const ok=FREE.includes(norm(i.n))||st.has(norm(i.n));const q=k>1?scale(i.q,k):i.q;return `<div class="ing ${ok?'':'miss'}"><span>${esc(i.n)}</span><span class="qv">${ok?`<b>${esc(q)}</b>`:`<i>${esc(q)} · falta</i>`}${k>1&&i.q?`<small>${esc(i.q)} cada</small>`:''}</span></div>`}).join('')}
@@ -92,6 +93,7 @@ function overlay(r,k,lot){
   ${r.story&&!lot?`<details class="grp"><summary>História</summary><p class="mu" style="padding:0 0 14px">${esc(r.story)}</p></details>`:''}
   ${lot?`<button class="b ok" id="rd" style="position:sticky;bottom:12px">Pronto · chamar ${esc(join(names(lot.orders)))}</button>`:''}</div>`;
   document.body.appendChild(o);$('.ov #x').onclick=()=>o.remove();
+  const eb=o.querySelector('#ed');if(eb)eb.onclick=()=>{o.remove();recipeForm(r)};
   if(lot)$('#rd').onclick=async()=>{
     $('#rd').disabled=true;
     await sb.from('orders').update({status:'ready',ready_at:new Date().toISOString()}).in('id',lot.orders.map(x=>x.id));
@@ -222,12 +224,12 @@ function itemSheet(it,b){
   if(it)q('#rm').onclick=async()=>{await sb.from('bar_items').delete().eq('id',it.id);done()};
 }
 function moreView(){
-  if(S.sub)return ({create:createView,bars:barsView,qr:qrView,prices:pricesView,shakers:shakersView})[S.sub]();
-  const M=[['qr','📱','QR do cardápio','Para convidados ou clientes'],...(isCounter()?[['prices','💰','Preços','Defina o valor de cada drink']]:[]),['shakers','🧴','Coqueteleiras','Tamanhos que você usa'],['create','➕','Criar drink','Receita, foto e história'],['bars','🏠','Meus bares','Trocar ou criar bar']];
+  if(S.sub)return ({edit:editListView,bars:barsView,qr:qrView,prices:pricesView,shakers:shakersView})[S.sub]();
+  const M=[['qr','📱','QR do cardápio','Para convidados ou clientes'],...(isCounter()?[['prices','💰','Preços','Defina o valor de cada drink']]:[]),['shakers','🧴','Coqueteleiras','Tamanhos que você usa'],['create','➕','Criar drink','Receita nova, com foto e história'],['edit','✏️','Editar receita','Importe, ajuste e atualize ou crie nova'],['bars','🏠','Meus bares','Trocar ou criar bar']];
   $('#v').innerHTML=`<h1>Mais</h1><p class="mu">${S.bar?esc(S.bar.name):''}</p><div class="list" style="margin-top:10px">
   ${S.bar?`<div><span><b>Receber pedidos</b><br><span class="mu">${S.bar.accepting_orders?'Ligado':'Pausado'}</span></span><button class="b g" id="pz">${S.bar.accepting_orders?'Pausar':'Retomar'}</button></div>`:''}
   ${M.map(m=>`<div data-s="${m[0]}" style="cursor:pointer"><span>${m[1]} <b>${m[2]}</b><br><span class="mu">${m[3]}</span></span><span>›</span></div>`).join('')}</div>`;
-  $$('[data-s]').forEach(c=>c.onclick=()=>{S.sub=c.dataset.s;moreView()});
+  $$('[data-s]').forEach(c=>c.onclick=()=>{if(c.dataset.s==='create')return recipeForm(null);S.sub=c.dataset.s;moreView()});
   const pz=$('#pz');if(pz)pz.onclick=async()=>{S.bar.accepting_orders=!S.bar.accepting_orders;await sb.from('bars').update({accepting_orders:S.bar.accepting_orders}).eq('id',S.bar.id);moreView()};
 }
 const back=()=>`<button class="b g" id="bk" style="margin-bottom:14px">← Voltar</button>`;
@@ -240,13 +242,44 @@ function qrView(){
   bindBack();$('#cp').onclick=()=>navigator.clipboard.writeText(url).then(()=>toast('Link copiado'));$('#pr').onclick=()=>print();
 }
 function pricesView(){
-  const q=S.pq||'';let l=S.recipes.filter(r=>!q||norm(r.name).includes(norm(q))).slice(0,60);
-  $('#v').innerHTML=`${back()}<h1>Preços</h1><p class="mu" style="margin:6px 0 12px">Só aparecem no cardápio os drinks com preço e ingredientes em estoque.</p><input id="pq" placeholder="Buscar drink" value="${esc(q)}">
-  <div class="list">${l.map(r=>`<div><span>${esc(r.name)}</span><input type="number" inputmode="decimal" step="0.5" min="0" data-p="${r.id}" value="${S.prices[r.id]??''}" placeholder="R$" style="width:100px"></div>`).join('')}</div>`;
-  bindBack();$('#pq').oninput=e=>{S.pq=e.target.value;const p=e.target.selectionStart;pricesView();$('#pq').focus();$('#pq').setSelectionRange(p,p)};
+  const q=S.pq||'',f=S.pf,tiers=S.bar.tiers&&S.bar.tiers.length?S.bar.tiers.map(Number):[20,28,36];
+  const priced=S.recipes.filter(r=>S.prices[r.id]!=null).length;
+  const l=S.recipes.filter(r=>(!q||norm(r.name).includes(norm(q)))&&(S.pc==='Todas'||r.category===S.pc)&&(f==='all'||(f==='none'?S.prices[r.id]==null:S.prices[r.id]!=null))&&(!S.pmk||!missing(r).length));
+  const shown=l.slice(0,S.pn),n=S.psel.size;
+  const row=r=>`<div><span class="row" style="flex:1;gap:12px"><input type="checkbox" class="ck" data-ck="${r.id}" ${S.psel.has(r.id)?'checked':''} aria-label="Selecionar ${esc(r.name)}"><span><b>${esc(r.name)}</b><br><span class="mu">${esc(r.category)}</span></span></span><input class="pi" type="number" inputmode="decimal" step="0.5" min="0" data-p="${r.id}" value="${S.prices[r.id]??''}" placeholder="R$"></div>`;
+  $('#v').innerHTML=`${back()}<h1>Preços</h1><p class="mu" style="margin-top:6px">${priced} de ${S.recipes.length} com preço. Só entram no cardápio os drinks com preço e ingredientes em estoque.</p>
+  <input id="pq" placeholder="Buscar drink" value="${esc(q)}" style="margin-top:12px">
+  <div class="chips">${[['none','Sem preço'],['with','Com preço'],['all','Todos']].map(x=>`<span class="chip ${f===x[0]?'on':''}" data-pf="${x[0]}">${x[1]}</span>`).join('')}<span class="chip ${S.pmk?'on':''}" id="mk">Só os que faço agora</span></div>
+  <select id="pcat">${['Todas',...CATS].map(c=>`<option ${S.pc===c?'selected':''}>${c}</option>`).join('')}</select>
+  <details class="grp" style="margin-top:8px"><summary>Ferramentas de preço</summary>
+    <label>Faixas de preço (atalhos)</label><div class="row">${tiers.map((t,i)=>`<input type="number" inputmode="decimal" data-t="${i}" value="${t}">`).join('')}</div>
+    <label>Reajustar todos os preços em %</label><div class="row"><input id="pct" type="number" inputmode="decimal" placeholder="Ex: 10 ou -5"><button class="b g" id="pa">Aplicar</button></div></details>
+  <div class="row sp" style="margin-top:14px"><label class="row" style="margin:0;color:var(--tx);gap:12px"><input type="checkbox" class="ck" id="all" ${l.length&&l.every(r=>S.psel.has(r.id))?'checked':''}> Selecionar todos (${l.length})</label><span class="mu">${n} selecionado${n===1?'':'s'}</span></div>
+  <div class="list">${shown.map(row).join('')||'<p class="mu" style="padding-top:12px">Nada nesta lista.</p>'}</div>
+  ${l.length>shown.length?`<button class="b g" id="more" style="width:100%;margin-top:10px">Mostrar mais (${l.length-shown.length})</button>`:''}
+  <div style="height:${n?150:20}px"></div>
+  ${n?`<div class="dock dk2"><div class="row"><input id="bulk" type="number" inputmode="decimal" step="0.5" placeholder="R$ para ${n} drink${n===1?'':'s'}"><button class="b ok" id="bo" style="margin:0;width:auto">Aplicar</button></div><div class="chips" style="padding-bottom:0">${tiers.map(t=>`<span class="chip" data-tp="${t}">${money(t)}</span>`).join('')}<span class="chip" id="rm">Remover preço</span></div></div>`:''}`;
+  bindBack();
+  $('#pq').oninput=e=>{S.pq=e.target.value;S.pn=100;const p=e.target.selectionStart;pricesView();$('#pq').focus();$('#pq').setSelectionRange(p,p)};
+  $$('[data-pf]').forEach(c=>c.onclick=()=>{S.pf=c.dataset.pf;S.pn=100;pricesView()});
+  $('#mk').onclick=()=>{S.pmk=!S.pmk;S.pn=100;pricesView()};
+  $('#pcat').onchange=e=>{S.pc=e.target.value;S.pn=100;pricesView()};
+  $('#all').onchange=e=>{l.forEach(r=>e.target.checked?S.psel.add(r.id):S.psel.delete(r.id));pricesView()};
+  $$('[data-ck]').forEach(c=>c.onchange=()=>{c.checked?S.psel.add(c.dataset.ck):S.psel.delete(c.dataset.ck);pricesView()});
+  if($('#more'))$('#more').onclick=()=>{S.pn+=100;pricesView()};
   $$('[data-p]').forEach(i=>i.onchange=async()=>{const id=i.dataset.p,v=parseFloat(i.value.replace(',','.'));
     if(isNaN(v)){await sb.from('bar_prices').delete().match({bar_id:S.bar.id,recipe_id:id});delete S.prices[id]}
     else{await sb.from('bar_prices').upsert({bar_id:S.bar.id,recipe_id:id,price:v});S.prices[id]=v}toast('Preço salvo')});
+  $$('[data-t]').forEach(i=>i.onchange=async()=>{const a=[...tiers];a[i.dataset.t]=parseFloat(i.value)||0;S.bar.tiers=a;await sb.from('bars').update({tiers:a}).eq('id',S.bar.id);toast('Faixa salva');pricesView()});
+  const apply=async v=>{const ids=[...S.psel],{error}=await sb.from('bar_prices').upsert(ids.map(id=>({bar_id:S.bar.id,recipe_id:id,price:v})));
+    if(error)return toast(error.message);ids.forEach(id=>S.prices[id]=v);S.psel.clear();toast(ids.length+' preço(s) definidos');pricesView()};
+  if($('#bo'))$('#bo').onclick=()=>{const v=parseFloat($('#bulk').value.replace(',','.'));if(isNaN(v)||v<0)return toast('Digite um preço');apply(v)};
+  $$('[data-tp]').forEach(c=>c.onclick=()=>apply(Number(c.dataset.tp)));
+  if($('#rm'))$('#rm').onclick=async()=>{const ids=[...S.psel];await sb.from('bar_prices').delete().eq('bar_id',S.bar.id).in('recipe_id',ids);ids.forEach(id=>delete S.prices[id]);S.psel.clear();toast('Preço removido');pricesView()};
+  $('#pa').onclick=async()=>{const p=parseFloat($('#pct').value.replace(',','.')),es=Object.entries(S.prices);
+    if(isNaN(p)||!es.length)return toast('Digite a porcentagem');if(!confirm('Reajustar '+es.length+' preços em '+p+'%?'))return;
+    const rows=es.map(([id,v])=>({bar_id:S.bar.id,recipe_id:id,price:Math.max(0,Math.round(v*(1+p/100)*2)/2)}));
+    const {error}=await sb.from('bar_prices').upsert(rows);if(error)return toast(error.message);rows.forEach(r=>S.prices[r.recipe_id]=r.price);toast('Preços reajustados');pricesView()};
 }
 function shakersView(){
   $('#v').innerHTML=`${back()}<h1>Coqueteleiras</h1><p class="mu" style="margin:6px 0">O app junta pedidos iguais e diz qual usar. Metade do volume é gelo.</p>
@@ -256,22 +289,65 @@ function shakersView(){
   $('#as').onclick=()=>{const v=parseInt($('#ns').value);if(v>=100)sv([...S.bar.shakers,v])};
   $$('[data-x]').forEach(c=>c.onclick=()=>sv(S.bar.shakers.filter((_,i)=>i!=c.dataset.x)));
 }
-function createView(){
-  $('#v').innerHTML=`${back()}<h1>Criar drink</h1><label>Nome</label><input id="n"><label>Categoria</label><select id="c">${CATS.map(c=>`<option>${c}</option>`).join('')}</select>
-  <label>Ingredientes (um por linha, ex: 50 ml Gin)</label><textarea id="i"></textarea><label>Descrição (aparece no cardápio do cliente)</label><textarea id="ds" style="min-height:80px" placeholder="Ex: Cítrico, refrescante e levemente adocicado."></textarea><label>Copo</label><input id="gl" placeholder="Ex: Copo baixo com gelo"><label>Técnica</label><input id="te" placeholder="Ex: Coqueteleira, mexido, direto no copo"><label>Decoração</label><input id="ga" placeholder="Ex: Casca de laranja"><label>Modo de preparo (um passo por linha)</label><textarea id="s" style="min-height:140px"></textarea>
-  <label>História (opcional)</label><textarea id="h"></textarea><label>Foto</label><div class="row"><button class="b g" id="pc" type="button">📷 Tirar foto</button><button class="b g" id="pg" type="button">🖼 Galeria</button></div><input id="fc" type="file" accept="image/*" capture="environment" hidden><input id="fg" type="file" accept="image/*" hidden><img id="pv" class="pv" alt="Prévia" hidden>
-  <label class="row" style="margin-top:16px"><input id="sk" type="checkbox" checked style="width:auto"> Feito na coqueteleira (pode juntar pedidos)</label>
-  <button class="b" id="sv">Salvar drink</button><p class="err" id="er"></p>`;bindBack();let photo=null;const pk=e=>{photo=e.target.files[0]||null;if(photo){$('#pv').src=URL.createObjectURL(photo);$('#pv').hidden=false}};
-  $('#fc').onchange=pk;$('#fg').onchange=pk;$('#pc').onclick=()=>$('#fc').click();$('#pg').onclick=()=>$('#fg').click();
-  $('#sv').onclick=async()=>{
-    const name=$('#n').value.trim(),ing=$('#i').value.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{const m=l.match(/^([\d.,\/]+\s*(?:ml|cl|g|dashes?|folhas?|colheres?|fatias?|un)?)\s+(.+)$/i);return m?{q:m[1],n:m[2]}:{q:'',n:l}});
-    if(!name||!ing.length)return $('#er').textContent='Informe o nome e ao menos um ingrediente.';
-    $('#sv').disabled=true;let url=null;const f=photo;
-    if(f){const p=`${S.user.id}/${Date.now()}-${f.name.replace(/[^\w.]/g,'_')}`;const u=await sb.storage.from('recipes').upload(p,f);if(!u.error)url=sb.storage.from('recipes').getPublicUrl(p).data.publicUrl}
-    const {error}=await sb.from('recipes').insert({name,category:$('#c').value,ingredients:ing,steps:$('#s').value,story:$('#h').value||null,image_url:url,shaken:$('#sk').checked,description:$('#ds').value.trim()||null,glass:$('#gl').value.trim()||null,technique:$('#te').value.trim()||null,garnish:$('#ga').value.trim()||null,author_nick:S.user.email.split('@')[0]});
-    if(error){$('#sv').disabled=false;return $('#er').textContent=error.message}
-    S.recipes=(await sb.from('recipes').select('*').order('name')).data;S.tab='recipes';S.sub=null;S.filter='all';render();toast('Drink salvo');
+const shrink=f=>new Promise(res=>{const i=new Image();i.onload=()=>{const k=Math.min(1,1000/Math.max(i.width,i.height)),c=document.createElement('canvas');c.width=Math.round(i.width*k);c.height=Math.round(i.height*k);c.getContext('2d').drawImage(i,0,0,c.width,c.height);c.toBlob(b=>res(b||f),'image/jpeg',.82)};i.onerror=()=>res(f);i.src=URL.createObjectURL(f)});
+async function upPhoto(f){const b=await shrink(f),p=`${S.user.id}/${Date.now()}.jpg`,u=await sb.storage.from('recipes').upload(p,b,{contentType:'image/jpeg'});if(u.error)throw u.error;return sb.storage.from('recipes').getPublicUrl(p).data.publicUrl}
+const parseIng=t=>t.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{
+  if(l.includes('|')){const [a,...b]=l.split('|');return {q:a.trim(),n:b.join('|').trim()}}
+  const m=l.match(/^([\d.,\/]+\s*(?:ml|cl|g|kg|dashes?|gotas?|folhas?|colheres? de (?:chá|sopa)|colheres?|fatias?|rodelas?|gomos?|cubos?|unidades?|un|pitadas?)?)\s+(.+)$/i);
+  return m?{q:m[1].trim(),n:m[2].trim()}:{q:'',n:l}}).filter(x=>x.n);
+const ingKey=a=>(a||[]).map(i=>(i.q||'')+'|'+i.n).join('\n');
+const canEdit=r=>S.admin||(r.owner&&r.owner===S.user.id);
+// Formulário único: criar drink ou editar uma receita importada
+function recipeForm(base){
+  const o=document.createElement('div');o.className='ov';let photo=null;
+  const v=k=>base&&base[k]?esc(base[k]):'';
+  const ingTxt=base?(base.ingredients||[]).map(i=>i.q?i.q+' | '+i.n:i.n).join('\n'):'';
+  o.innerHTML=`<div class="w"><button class="b g" id="x">← Voltar</button><h1 style="margin:14px 0 4px">${base?'Editar receita':'Criar drink'}</h1>${base?`<p class="mu">Importada: ${esc(base.name)}${base.verified?' · ✓ verificada':''}</p>`:''}
+  <label>Nome</label><input id="n" value="${v('name')}">
+  <label>Categoria</label><select id="c">${CATS.map(c=>`<option ${base&&base.category===c?'selected':''}>${c}</option>`).join('')}</select>
+  <label>Descrição (aparece no cardápio do cliente)</label><textarea id="ds" style="min-height:80px">${v('description')}</textarea>
+  <label>Copo</label><input id="gl" value="${v('glass')}" placeholder="Ex: Copo baixo com gelo">
+  <label>Técnica</label><input id="te" value="${v('technique')}" placeholder="Ex: Coqueteleira, mexido, direto no copo">
+  <label>Decoração</label><input id="ga" value="${v('garnish')}" placeholder="Ex: Casca de laranja">
+  <label>Ingredientes (um por linha: quantidade | ingrediente)</label><textarea id="i" style="min-height:130px" placeholder="50 ml | Gin&#10;Gelo">${esc(ingTxt)}</textarea>
+  <label>Modo de preparo (um passo por linha)</label><textarea id="s" style="min-height:160px">${v('steps')}</textarea>
+  <label>História (opcional)</label><textarea id="h">${v('story')}</textarea>
+  <label>Foto</label><img id="pv" class="pv" alt="Foto" ${base&&base.image_url?`src="${esc(base.image_url)}"`:'hidden'}>
+  <div class="row" style="margin-top:10px"><button class="b g" id="pc" type="button">📷 Tirar foto</button><button class="b g" id="pg" type="button">🖼 Galeria</button></div>
+  <input id="fc" type="file" accept="image/*" capture="environment" hidden><input id="fg" type="file" accept="image/*" hidden>
+  <label class="row" style="margin-top:16px;color:var(--tx)"><input id="sk" type="checkbox" ${!base||base.shaken?'checked':''} style="width:auto"> Feito na coqueteleira (pode juntar pedidos)</label>
+  ${base?`<button class="b" id="up">Atualizar receita existente</button><button class="b g" id="nw" style="width:100%;margin-top:8px">Salvar como nova receita (mantém a original)</button>`:`<button class="b" id="nw">Salvar drink</button>`}
+  <p class="err" id="er"></p>${base&&base.sources?`<p class="mu" style="margin-top:14px">Fontes da verificação: ${esc(base.sources)}</p>`:''}</div>`;
+  document.body.appendChild(o);const q=s=>o.querySelector(s);q('#x').onclick=()=>o.remove();
+  const pk=e=>{photo=e.target.files[0]||null;if(photo){q('#pv').src=URL.createObjectURL(photo);q('#pv').hidden=false}};
+  q('#fc').onchange=pk;q('#fg').onchange=pk;q('#pc').onclick=()=>q('#fc').click();q('#pg').onclick=()=>q('#fg').click();
+  const lock=b=>o.querySelectorAll('#up,#nw').forEach(x=>x.disabled=b);
+  const save=async mode=>{
+    const name=q('#n').value.trim(),ing=parseIng(q('#i').value);
+    if(!name||!ing.length)return q('#er').textContent='Informe o nome e ao menos um ingrediente.';
+    lock(true);q('#er').textContent='';let url=base?base.image_url:null;
+    try{if(photo)url=await upPhoto(photo)}catch(e){lock(false);return q('#er').textContent='Não consegui enviar a foto: '+(e.message||e)}
+    const row={name:mode==='new'&&base&&name===base.name?name+' (cópia)':name,category:q('#c').value,description:q('#ds').value.trim()||null,glass:q('#gl').value.trim()||null,technique:q('#te').value.trim()||null,garnish:q('#ga').value.trim()||null,ingredients:ing,steps:q('#s').value,story:q('#h').value.trim()||null,image_url:url,shaken:q('#sk').checked};
+    let r,note='Receita salva';
+    if(mode==='update'){if(base.verified&&ingKey(ing)!==ingKey(base.ingredients)){row.verified=false;note='Atualizada. O selo de verificada saiu porque os ingredientes mudaram'}else note='Receita atualizada';
+      r=await sb.from('recipes').update(row).eq('id',base.id).select()}
+    else r=await sb.from('recipes').insert({...row,author_nick:S.user.email.split('@')[0]}).select();
+    if(r.error||!r.data||!r.data.length){lock(false);return q('#er').textContent=r.error?r.error.message:'Sem permissão para atualizar esta receita. Use "Salvar como nova" ou cadastre seu e-mail como admin (migracao-4.sql).'}
+    S.recipes=(await sb.from('recipes').select('*').order('name')).data||S.recipes;o.remove();toast(note);
+    if(S.tab==='more'&&S.sub==='edit')editListView();else if(S.tab==='recipes')recipesView();
   };
+  if(base)q('#up').onclick=()=>save('update');q('#nw').onclick=()=>save('new');
+}
+function editListView(){
+  const q=S.eq||'',l=S.recipes.filter(r=>!q||norm(r.name).includes(norm(q))).slice(0,80);
+  $('#v').innerHTML=`${back()}<h1>Editar receita</h1><p class="mu" style="margin-top:6px">Escolha uma receita e toque em “Importar receita”.</p>
+  <input id="eq" placeholder="Buscar pelo nome" value="${esc(q)}" style="margin-top:12px">
+  <div class="list">${l.map(r=>`<div data-sel="${r.id}" class="${S.esel===r.id?'sel':''}" style="cursor:pointer"><span><b>${esc(r.name)}</b><br><span class="mu">${esc(r.category)}${r.verified?' · ✓ verificada':''}</span></span><span>${S.esel===r.id?'●':'○'}</span></div>`).join('')||'<p class="mu" style="padding-top:12px">Nenhuma receita encontrada.</p>'}</div>
+  <div style="height:90px"></div><div class="dock"><button class="b" id="imp" style="margin:0" ${S.esel?'':'disabled'}>Importar receita</button></div>`;
+  bindBack();
+  $('#eq').oninput=e=>{S.eq=e.target.value;const p=e.target.selectionStart;editListView();$('#eq').focus();$('#eq').setSelectionRange(p,p)};
+  $$('[data-sel]').forEach(c=>c.onclick=()=>{S.esel=c.dataset.sel;editListView()});
+  $('#imp').onclick=()=>{const r=S.recipes.find(x=>x.id===S.esel);if(r)recipeForm(r)};
 }
 function barsView(){
   const K={home:'Casa (sem preço)',counter:'Balcão (com preço e caixa)',tables:'Mesas'};
