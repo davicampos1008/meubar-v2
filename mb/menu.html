@@ -20,12 +20,5 @@
   <script src="config.js"></script>
   <script src="brand.js"></script>
   <script src="menu.js"></script>
-  <script>
-    if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => {
-        navigator.serviceWorker.register("./sw.js").catch(console.warn);
-      });
-    }
-  </script>
 </body>
 </html>
