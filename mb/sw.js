@@ -1,4 +1,4 @@
-const CACHE = "meubar-v1";
+const CACHE = "meubar-v2";
 const ASSETS = [
   "./",
   "./index.html",
@@ -10,13 +10,17 @@ const ASSETS = [
   "./brand.js",
   "./config.js",
   "./logo.svg",
-  "./manifest.json",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png"
+  "./manifest.json"
 ];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(
+    caches.open(CACHE).then(async (c) => {
+      await Promise.all(
+        ASSETS.map((u) => c.add(u).catch(() => null))
+      );
+    }).then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener("activate", (e) => {
@@ -31,15 +35,21 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (url.origin !== self.location.origin) return;
   e.respondWith(
-    caches.match(e.request).then((cached) => cached || fetch(e.request).then((res) => {
-      const copy = res.clone();
-      caches.open(CACHE).then((c) => c.put(e.request, copy));
-      return res;
-    }).catch(() => cached))
+    caches.match(e.request).then((cached) =>
+      cached ||
+      fetch(e.request)
+        .then((res) => {
+          if (res && res.ok && e.request.method === "GET") {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(e.request, copy));
+          }
+          return res;
+        })
+        .catch(() => cached)
+    )
   );
 });
 
-// Notificações recebidas pelo service worker
 self.addEventListener("push", (e) => {
   const data = e.data ? e.data.json() : { title: "Meu Bar", body: "Seu drink está pronto!" };
   e.waitUntil(

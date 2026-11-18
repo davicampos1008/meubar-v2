@@ -3,8 +3,26 @@ const $=s=>document.querySelector(s),app=$('#app'),BAR=new URLSearchParams(locat
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=v=>'R$ '+Number(v).toFixed(2).replace('.',',');
 const CATS=['Refrescantes','Fortes','Cítricos','Tropicais','Doces & Frutados','Aperitivos'],EMO=['🍋','🥃','🍊','🍹','🍓','🥂'];
+const ALL_TAGS=['Refrescante','Forte','Doce','Ácido','Charmoso','Fácil','Clássico','Tropical','Aperitivo','Longo','Curto','Com hortelã','Com soda','Frutado','Amargo'];
+const recipeTags=r=>{
+  if(Array.isArray(r.tags)&&r.tags.length)return r.tags;
+  const t=[];
+  if(r.category==='Refrescantes')t.push('Refrescante','Longo');
+  if(r.category==='Fortes')t.push('Forte','Curto');
+  if(r.category==='Cítricos')t.push('Ácido');
+  if(r.category==='Tropicais')t.push('Tropical');
+  if(r.category==='Doces & Frutados')t.push('Doce','Frutado');
+  if(r.category==='Aperitivos')t.push('Aperitivo');
+  return t;
+};
+const matchTags=r=>{
+  if(!M.tags.size)return true;
+  const t=new Set(recipeTags(r));
+  for(const x of M.tags)if(!t.has(x))return false;
+  return true;
+};
 const today=()=>new Date().toLocaleDateString('sv-SE');
-const M={bar:null,items:[],cat:'Todas',name:'',mine:[]};
+const M={bar:null,items:[],cat:'Todas',name:'',mine:[],tags:new Set(),showTags:false};
 const save=()=>localStorage.setItem('mine'+BAR,JSON.stringify(M.mine));
 const priced=()=>M.bar.kind!=='home';
 const cnt=()=>M.mine.reduce((s,o)=>s+o.qty,0),total=()=>M.mine.reduce((s,o)=>s+o.qty*(o.price||0),0);
@@ -21,12 +39,27 @@ async function load(){
   M.name?draw():gate();poll();
 }
 // Primeira tela: trava tudo até o cliente dizer o nome (lembrado neste celular durante o dia)
-function gate(){
-  app.innerHTML=`<div class="gate">${brandMark('big')}<p class="mu" style="margin-top:26px">Bem-vindo ao</p><h1>${esc(M.bar.name)}</h1>
-  <p class="mu" style="margin:10px 0 22px">Para fazer seu pedido, diga como devemos te chamar.</p>
-  <input id="nm" placeholder="Seu nome" maxlength="40" autocomplete="given-name"><button class="b" id="go">Ver cardápio</button><p class="err" id="er"></p></div>`;
-  const go=()=>{const n=$('#nm').value.trim();if(n.length<2)return $('#er').textContent='Digite pelo menos 2 letras.';M.name=n;localStorage.setItem('nm',n);localStorage.setItem('nmd',today());draw()};
-  $('#go').onclick=go;$('#nm').onkeydown=e=>{if(e.key==='Enter')go()};setTimeout(()=>$('#nm')&&$('#nm').focus(),100);
+function draw(){
+  const cats=['Todas',...new Set(M.items.map(i=>i.category))];
+  let l=M.items.filter(i=>M.cat==='Todas'||i.category===M.cat).filter(matchTags);
+  app.innerHTML=`<div class="top">${brandMark()}<button class="lnk" id="tr">${esc(M.name)} · trocar</button></div><div class="w"><p class="mu">Cardápio</p><h1>${esc(M.bar.name)}</h1>
+  ${M.bar.open?'':'<p class="err" style="font-size:1rem">Pedidos pausados no momento. Tente de novo em instantes.</p>'}
+  <div class="row" style="margin-top:10px"><button class="b g" id="tg">✨ O que tomar?</button></div>
+  ${cats.length>2?`<div class="chips">${cats.map(c=>`<span class="chip ${M.cat===c?'on':''}" data-c="${esc(c)}">${esc(c)}</span>`).join('')}</div>`:''}
+  ${M.showTags?`<div class="chips" style="flex-wrap:wrap;overflow:visible">
+    ${ALL_TAGS.map(t=>`<span class="chip ${M.tags.has(t)?'on':''}" data-tag="${esc(t)}">${esc(t)}</span>`).join('')}
+    ${M.tags.size?`<span class="chip" id="ctags" style="border-style:dashed">Limpar filtros</span>`:''}
+  </div><p class="mu">${M.tags.size?M.tags.size+' filtro(s) · '+l.length+' opção(ões)':''}</p>`:''}
+  <div class="grid" style="margin-top:10px">${l.map(r=>{const tg=recipeTags(r).slice(0,2);
+    return `<button class="card" data-r="${r.id}">${tile(r)}<div class="t">${esc(r.name)}${r.price!=null?`<br><span class="tag pr">${money(r.price)}</span>`:''}${tg.length?`<br><span class="tag">${esc(tg.join(' · '))}</span>`:''}</div></button>`}).join('')||'<p class="mu">Nenhum drink com esses filtros agora.</p>'}</div></div>
+  ${M.mine.length?`<button class="cart" id="ct"><span>🍸 ${cnt()} ${cnt()===1?'item pedido':'itens pedidos'}</span>${priced()?`<b>${money(total())}</b>`:''}</button>`:''}`;
+  $('#tr').onclick=()=>{localStorage.removeItem('nm');M.name='';gate()};
+  $('#tg').onclick=()=>{M.showTags=!M.showTags;draw()};
+  document.querySelectorAll('[data-c]').forEach(c=>c.onclick=()=>{M.cat=c.dataset.c;draw()});
+  document.querySelectorAll('[data-tag]').forEach(c=>c.onclick=()=>{const t=c.dataset.tag;M.tags.has(t)?M.tags.delete(t):M.tags.add(t);draw()});
+  const cl=$('#ctags');if(cl)cl.onclick=()=>{M.tags.clear();draw()};
+  document.querySelectorAll('[data-r]').forEach(c=>c.onclick=()=>detail(M.items.find(i=>i.id===c.dataset.r)));
+  if($('#ct'))$('#ct').onclick=myOrders;
 }
 function draw(){
   const cats=['Todas',...new Set(M.items.map(i=>i.category))],l=M.items.filter(i=>M.cat==='Todas'||i.category===M.cat);

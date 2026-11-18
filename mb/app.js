@@ -6,7 +6,26 @@ const money=v=>'R$ '+Number(v||0).toFixed(2).replace('.',',');
 const FREE=['gelo','agua','agua gelada'];
 const CATS=['Refrescantes','Fortes','Cítricos','Tropicais','Doces & Frutados','Aperitivos'];
 const EMO=['🍋','🥃','🍊','🍹','🍓','🥂'];
-const S={user:null,bars:[],bar:null,items:[],recipes:[],prices:{},orders:[],tab:'recipes',sub:null,filter:'now',cat:'Todas',q:'',icat:'Destilados',cq:'',fo:false,open:{},admin:false,pf:'none',pmk:false,psel:new Set(),pc:'Todas',pn:100,eq:'',esel:null};
+const ALL_TAGS=['Refrescante','Forte','Doce','Ácido','Charmoso','Fácil','Clássico','Tropical','Aperitivo','Longo','Curto','Com hortelã','Com soda','Frutado','Amargo'];
+const recipeTags=r=>{
+  if(Array.isArray(r.tags)&&r.tags.length)return r.tags;
+  // fallback se ainda não rodou o SQL de tags
+  const t=[];
+  if(r.category==='Refrescantes')t.push('Refrescante','Longo');
+  if(r.category==='Fortes')t.push('Forte','Curto');
+  if(r.category==='Cítricos')t.push('Ácido');
+  if(r.category==='Tropicais')t.push('Tropical');
+  if(r.category==='Doces & Frutados')t.push('Doce','Frutado');
+  if(r.category==='Aperitivos')t.push('Aperitivo');
+  return t;
+};
+const matchTags=r=>{
+  if(!S.tags.size)return true;
+  const t=new Set(recipeTags(r));
+  for(const x of S.tags)if(!t.has(x))return false;
+  return true;
+};
+const S={user:null,bars:[],bar:null,items:[],recipes:[],prices:{},orders:[],tab:'recipes',sub:null,filter:'now',cat:'Todas',q:'',icat:'Destilados',cq:'',fo:false,open:{},admin:false,pf:'none',pmk:false,psel:new Set(),pc:'Todas',pn:100,eq:'',esel:null,tags:new Set(), showTags:false};
 const stock=()=>new Set(S.items.filter(i=>i.in_stock).map(i=>norm(i.name)));
 const missing=r=>{const st=stock();return (r.ingredients||[]).filter(i=>!FREE.includes(norm(i.n))&&!st.has(norm(i.n)))};
 const tile=r=>`<div class="im c${Math.max(0,CATS.indexOf(r.category))}" style="${r.image_url?`background-image:url('${esc(r.image_url)}')`:''}">${r.image_url?'':EMO[CATS.indexOf(r.category)]||'🍸'}</div>`;
@@ -63,16 +82,27 @@ function render(){
 function recipesView(){
   const all=S.recipes,now=all.filter(r=>!missing(r).length),one=all.filter(r=>missing(r).length===1);
   let l=S.filter==='now'?now:S.filter==='one'?one:all;
-  if(S.cat!=='Todas')l=l.filter(r=>r.category===S.cat);if(S.q)l=l.filter(r=>norm(r.name).includes(norm(S.q)));
-  $('#v').innerHTML=`<div class="row sp"><div><h1>Receitas</h1><p class="mu">${esc(S.bar.name)} · você faz ${now.length}</p></div><button class="b g" id="fl">${S.cat==='Todas'?'Categorias':esc(S.cat)} ▾</button></div>
+  if(S.cat!=='Todas')l=l.filter(r=>r.category===S.cat);
+  if(S.q)l=l.filter(r=>norm(r.name).includes(norm(S.q)));
+  l=l.filter(matchTags);
+  $('#v').innerHTML=`<div class="row sp"><div><h1>Receitas</h1><p class="mu">${esc(S.bar.name)} · você faz ${now.length}</p></div>
+  <div class="row"><button class="b g" id="tg">✨ O que tomar?</button><button class="b g" id="fl">${S.cat==='Todas'?'Categorias':esc(S.cat)} ▾</button></div></div>
   <input id="q" placeholder="Buscar drink" value="${esc(S.q)}" style="margin-top:14px">
   <div class="chips">${[['now','Faço agora'],['one','Falta 1'],['all','Todas']].map(f=>`<span class="chip ${S.filter===f[0]?'on':''}" data-f="${f[0]}">${f[1]}</span>`).join('')}</div>
   ${S.fo?`<div class="chips" style="flex-wrap:wrap;overflow:visible">${['Todas',...CATS].map(c=>`<span class="chip ${S.cat===c?'on':''}" data-c="${c}">${c}</span>`).join('')}</div>`:''}
-  <div class="grid">${l.slice(0,120).map(r=>{const m=missing(r);return `<button class="card" data-r="${r.id}">${tile(r)}<div class="t">${esc(r.name)}${m.length?`<br><span class="tag">falta ${m.length}</span>`:''}</div></button>`}).join('')||'<p class="mu">Nada por aqui. Adicione itens no Estoque.</p>'}</div>`;
+  ${S.showTags?`<div class="chips" style="flex-wrap:wrap;overflow:visible;margin-top:4px">
+    ${ALL_TAGS.map(t=>`<span class="chip ${S.tags.has(t)?'on':''}" data-tag="${esc(t)}">${esc(t)}</span>`).join('')}
+    ${S.tags.size?`<span class="chip" id="ctags" style="border-style:dashed">Limpar filtros</span>`:''}
+  </div><p class="mu" style="margin-top:4px">${S.tags.size?S.tags.size+' filtro(s) · '+l.length+' drink(s)':''}</p>`:''}
+  <div class="grid">${l.slice(0,120).map(r=>{const m=missing(r);const tg=recipeTags(r).slice(0,2);
+    return `<button class="card" data-r="${r.id}">${tile(r)}<div class="t">${esc(r.name)}${m.length?`<br><span class="tag">falta ${m.length}</span>`:''}${tg.length?`<br><span class="tag">${esc(tg.join(' · '))}</span>`:''}</div></button>`}).join('')||'<p class="mu">Nada com esses filtros. Troque as tags ou o estoque.</p>'}</div>`;
   $('#q').oninput=e=>{S.q=e.target.value;const p=e.target.selectionStart;recipesView();$('#q').focus();$('#q').setSelectionRange(p,p)};
   $('#fl').onclick=()=>{S.fo=!S.fo;recipesView()};
+  $('#tg').onclick=()=>{S.showTags=!S.showTags;recipesView()};
   $$('[data-f]').forEach(c=>c.onclick=()=>{S.filter=c.dataset.f;recipesView()});
   $$('[data-c]').forEach(c=>c.onclick=()=>{S.cat=c.dataset.c;S.fo=false;recipesView()});
+  $$('[data-tag]').forEach(c=>c.onclick=()=>{const t=c.dataset.tag;S.tags.has(t)?S.tags.delete(t):S.tags.add(t);recipesView()});
+  const cl=$('#ctags');if(cl)cl.onclick=()=>{S.tags.clear();recipesView()};
   $$('[data-r]').forEach(c=>c.onclick=()=>overlay(S.recipes.find(x=>x.id===c.dataset.r),1,null));
 }
 const stepsHtml=t=>{const a=String(t||'').split('\n').map(x=>x.replace(/^\s*\d+[.)]\s*/,'').trim()).filter(Boolean);return a.length?`<ol class="st">${a.map(x=>`<li><span>${esc(x)}</span></li>`).join('')}</ol>`:'<p class="mu" style="margin:8px 0 20px">Sem modo de preparo cadastrado.</p>'};
