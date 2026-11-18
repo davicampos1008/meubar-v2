@@ -378,3 +378,19 @@ function editBar(b){
     o.remove();render();toast('Bar excluído')};
 }
 boot();
+// Registrar PWA
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch(console.warn);
+  });
+}
+
+// Pedir permissão de notificação (chame depois do login ou ao abrir a fila)
+async function enableNotifications() {
+  if (!("Notification" in window)) return;
+  const perm = await Notification.requestPermission();
+  if (perm === "granted" && navigator.serviceWorker.controller) {
+    // Exemplo local (sem servidor de push ainda):
+    // new Notification("Meu Bar", { body: "Notificações ativas", icon: "./icons/icon-192.png" });
+  }
+}
