@@ -25,7 +25,9 @@ const matchTags=r=>{
   for(const x of S.tags)if(!t.has(x))return false;
   return true;
 };
-const S={user:null,bars:[],bar:null,items:[],recipes:[],prices:{},orders:[],tab:'recipes',sub:null,filter:'now',cat:'Todas',q:'',icat:'Destilados',cq:'',fo:false,open:{},admin:false,pf:'none',pmk:false,psel:new Set(),pc:'Todas',pn:100,eq:'',esel:null,tags:new Set(), showTags:false};
+const S={user:null,bars:[],bar:null,items:[],recipes:[],prices:{},orders:[],tab:'recipes',sub:null,filter:'now',cat:'Todas',q:'',icat:'Destilados',cq:'',fo:false,open:{},admin:false,pf:'none',pmk:false,psel:new Set(),pc:'Todas',pn:100,eq:'',esel:null,tags:new Set(), showTags:false,roles:{}};
+const myRole=()=>S.bar&&S.user?(S.bar.owner===S.user.id?'owner':(S.roles[S.bar.id]||null)):null;
+const TABS={owner:['recipes','stock','queue','cash','more'],barman:['recipes','stock','queue','more'],caixa:['cash','more']};
 const stock=()=>new Set(S.items.filter(i=>i.in_stock).map(i=>norm(i.name)));
 const missing=r=>{const st=stock();return (r.ingredients||[]).filter(i=>!FREE.includes(norm(i.n))&&!st.has(norm(i.n)))};
 const tile=r=>`<div class="im c${Math.max(0,CATS.indexOf(r.category))}" style="${r.image_url?`background-image:url('${esc(r.image_url)}')`:''}">${r.image_url?'':EMO[CATS.indexOf(r.category)]||'🍸'}</div>`;
@@ -37,15 +39,19 @@ const join=a=>a.length<2?a.join(''):a.slice(0,-1).join(', ')+' e '+a[a.length-1]
 function beep(){try{const c=new (window.AudioContext||window.webkitAudioContext)(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.frequency.value=880;g.gain.setValueAtTime(.2,c.currentTime);g.gain.exponentialRampToValueAtTime(.001,c.currentTime+.4);o.start();o.stop(c.currentTime+.4)}catch(e){}}
 function toast(t){const d=document.createElement('div');d.className='toast';d.textContent=t;document.body.appendChild(d);setTimeout(()=>d.remove(),2200)}
 
+const _inv=new URLSearchParams(location.search).get('convite');
+if(_inv){localStorage.setItem('convite',_inv.toUpperCase().trim());history.replaceState(null,'',location.pathname)}
 async function boot(){
   const {data:{session}}=await sb.auth.getSession();
   if(!session){S.user=null;return authView()}
   S.user=session.user;try{const a=await sb.from('admins').select('user_id').eq('user_id',S.user.id);S.admin=!!(a.data&&a.data.length)}catch(e){S.admin=false}
   const [b,r]=await Promise.all([sb.from('bars').select('*').order('created_at'),sb.from('recipes').select('*').order('name')]);
   S.bars=b.data||[];S.recipes=r.data||[];
+  try{const m=await sb.from('bar_members').select('bar_id,role').eq('user_id',S.user.id);S.roles=Object.fromEntries((m.data||[]).map(x=>[x.bar_id,x.role]))}catch(e){S.roles={}}
   S.bar=S.bars.find(x=>x.id===localStorage.getItem('bar'))||S.bars[0]||null;
   if(S.bar)await loadBar();else{S.tab='more';S.sub='bars'}
   render();
+  const pc=localStorage.getItem('convite');if(pc){localStorage.removeItem('convite');acceptSheet(pc)}
 }
 async function loadBar(){
   const id=S.bar.id;
@@ -63,7 +69,7 @@ async function loadBar(){
 const pend=()=>S.orders.filter(o=>o.status==='pending').length;
 const updBadge=()=>{const b=$('.bd');if(b){b.textContent=pend();b.style.display=pend()?'':'none'}};
 function authView(msg=''){
-  app.innerHTML=`<div class="w" style="padding-top:10vh">${brandMark('big')}<p class="mu" style="margin:22px 0 24px;text-align:center">Receitas, estoque e pedidos do seu bar. Em qualquer celular.</p>
+  app.innerHTML=`<div class="w" style="padding-top:10vh">${brandMark('big')}<p class="mu" style="margin:22px 0 24px;text-align:center">Receitas, estoque e pedidos do seu bar. Em qualquer celular.</p>${localStorage.getItem('convite')?'<p class="vf" style="text-align:center">Você recebeu um convite. Crie sua conta ou entre para aceitar.</p>':''}
   <label>E-mail</label><input id="em" type="email" autocomplete="email"><label>Senha</label><input id="pw" type="password" autocomplete="current-password" minlength="6">
   <button class="b" id="in">Entrar</button><button class="b g" id="up" style="width:100%;margin-top:8px">Criar conta</button><p class="err" id="er">${esc(msg)}</p></div>`;
   const go=async fn=>{if(!$('#em').value.trim()||$('#pw').value.length<6)return $('#er').textContent='Preencha o e-mail e uma senha com 6 ou mais caracteres.';const r=await sb.auth[fn]({email:$('#em').value,password:$('#pw').value});
@@ -72,10 +78,12 @@ function authView(msg=''){
   $('#in').onclick=()=>go('signInWithPassword');$('#up').onclick=()=>go('signUp');
 }
 function render(){
-  const T=[['recipes','🍸','Receitas'],['stock','🍾','Estoque'],['queue','🛎️','Fila'],...(isCounter()?[['cash','💵','Caixa']]:[]),['more','⋯','Mais']];
+  const role=myRole()||'owner';
+  const T=[['recipes','🍸','Receitas'],['stock','🍾','Estoque'],['queue','🛎️','Fila'],...(isCounter()||role==='caixa'?[['cash','💵','Caixa']]:[]),['more','⋯','Mais']].filter(t=>(TABS[role]||TABS.owner).includes(t[0]));
   app.innerHTML=`<div class="top">${brandMark()}</div><div class="w" id="v"></div><nav class="nav">${T.map(t=>`<button class="${S.tab===t[0]?'on':''}" data-nav="${t[0]}"><span>${t[1]}</span>${t[2]}${t[0]==='queue'?`<i class="bd" style="${pend()?'':'display:none'}">${pend()}</i>`:''}</button>`).join('')}</nav>`;
   $$('[data-nav]').forEach(b=>b.onclick=()=>{S.tab=b.dataset.nav;S.sub=null;render()});
   if(!S.bar&&S.tab!=='more'){S.tab='more';S.sub='bars'}
+  if(S.bar&&!T.some(t=>t[0]===S.tab)){S.tab=T[0][0];S.sub=null;return render()}
   if(S.tab!=='more'&&!S.bar)return;
   ({recipes:recipesView,stock:stockView,queue:queueView,cash:cashView,more:moreView})[S.tab]();
 }
@@ -175,7 +183,7 @@ function unlockTips(){
 }
 const barPick=()=>S.bars.length>1?`<select id="bs" class="bsel" aria-label="Escolher bar">${S.bars.map(b=>`<option value="${b.id}" ${S.bar.id===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select>`:`<p class="mu">${esc(S.bar.name)}</p>`;
 function stockView(){
-  const q=S.sq||'',lvc=l=>(LV.find(x=>x[0]===l)||LV[0])[1],T=unlockTips();
+  const q=S.sq||'',lvc=l=>(LV.find(x=>x[0]===l)||LV[0])[1],T=myRole()==='owner'?unlockTips():[];
   const mine=S.items.filter(i=>!q||[i.name,i.brand,i.variant].some(x=>norm(x||'').includes(norm(q))));
   const sub=i=>QTY.includes(i.category)?(i.variant||'unidades'):([i.brand,i.variant,i.size_ml?i.size_ml+' ml':''].filter(Boolean).join(' · ')||'sem detalhes');
   const row=i=>`<div><span data-ed="${i.id}" style="flex:1;cursor:pointer"><b class="${i.in_stock?'':'off'}">${esc(i.name)}</b><br><span class="mu">${esc(sub(i))}</span></span>${QTY.includes(i.category)
@@ -183,13 +191,13 @@ function stockView(){
     :`<button class="lv ${i.level}" data-lv="${i.id}">${lvc(i.level)}</button>`}</div>`;
   const groups=Object.keys(CAT).map(c=>({c,l:mine.filter(i=>i.category===c)})).filter(g=>g.l.length);
   $('#v').innerHTML=`<div class="row sp"><div style="min-width:0;flex:1"><h1>Estoque</h1>${barPick()}<p class="mu">${S.items.length} itens</p></div>${T.length?`<button class="tip" id="tp" aria-label="Itens que liberam receitas">💡 ${T.length}</button>`:''}</div>
-  <button class="b" id="ad">+ Adicionar item</button>
+  ${myRole()==='owner'?'<button class="b" id="ad">+ Adicionar item</button>':''}
   ${S.items.length>6?`<input id="sq" placeholder="Buscar no meu estoque" value="${esc(q)}" style="margin-top:12px">`:''}
   <div style="margin-top:12px">${groups.map(g=>`<details class="grp" data-g="${esc(g.c)}" ${(q||(S.open[g.c]!==undefined?S.open[g.c]:groups.length<=2))?'open':''}><summary><span>${esc(g.c)} <span class="mu">${g.l.length}</span></span></summary><div class="list">${g.l.map(row).join('')}</div></details>`).join('')||'<p class="mu" style="padding-top:14px">Seu estoque está vazio. Toque em “Adicionar item” para começar.</p>'}</div>`;
-  $('#ad').onclick=picker;if($('#bs'))$('#bs').onchange=async e=>{S.bar=S.bars.find(b=>b.id===e.target.value);localStorage.setItem('bar',S.bar.id);await loadBar();render()};if($('#tp'))$('#tp').onclick=tipsView;
+  if($('#ad'))$('#ad').onclick=picker;if($('#bs'))$('#bs').onchange=async e=>{S.bar=S.bars.find(b=>b.id===e.target.value);localStorage.setItem('bar',S.bar.id);await loadBar();render()};if($('#tp'))$('#tp').onclick=tipsView;
   if($('#sq'))$('#sq').oninput=e=>{S.sq=e.target.value;const p=e.target.selectionStart;stockView();$('#sq').focus();$('#sq').setSelectionRange(p,p)};
   $$('details[data-g]').forEach(d=>d.ontoggle=()=>{S.open[d.dataset.g]=d.open});
-  $$('[data-ed]').forEach(c=>c.onclick=()=>{const it=S.items.find(i=>i.id===c.dataset.ed);itemSheet(it,catItem(it.name)||{c:it.category,name:it.name,vars:[]})});
+  if(myRole()==='owner')$$('[data-ed]').forEach(c=>c.onclick=()=>{const it=S.items.find(i=>i.id===c.dataset.ed);itemSheet(it,catItem(it.name)||{c:it.category,name:it.name,vars:[]})});
   $$('[data-lv]').forEach(c=>c.onclick=async()=>{const it=S.items.find(i=>i.id===c.dataset.lv),n=LV[(LV.findIndex(x=>x[0]===it.level)+1)%4][0];
     it.level=n;it.in_stock=n!=='empty';await sb.from('bar_items').update({level:n,in_stock:it.in_stock}).eq('id',it.id);stockView()});
   const step=d=>async c=>{const it=S.items.find(i=>i.id===c.dataset[d>0?'qp':'qm']);it.qty=Math.max(0,(it.qty||0)+d);it.in_stock=it.qty>0;
@@ -254,10 +262,13 @@ function itemSheet(it,b){
   if(it)q('#rm').onclick=async()=>{await sb.from('bar_items').delete().eq('id',it.id);done()};
 }
 function moreView(){
-  if(S.sub)return ({edit:editListView,bars:barsView,qr:qrView,prices:pricesView,shakers:shakersView})[S.sub]();
-  const M=[['qr','📱','QR do cardápio','Para convidados ou clientes'],...(isCounter()?[['prices','💰','Preços','Defina o valor de cada drink']]:[]),['shakers','🧴','Coqueteleiras','Tamanhos que você usa'],['create','➕','Criar drink','Receita nova, com foto e história'],['edit','✏️','Editar receita','Importe, ajuste e atualize ou crie nova'],['bars','🏠','Meus bares','Trocar ou criar bar']];
+  if(S.sub)return ({edit:editListView,bars:barsView,qr:qrView,prices:pricesView,shakers:shakersView,team:teamView})[S.sub]();
+  const role=myRole()||'owner';
+  const MALL=[['qr','📱','QR do cardápio','Para convidados ou clientes'],...(isCounter()?[['prices','💰','Preços','Defina o valor de cada drink']]:[]),['shakers','🧴','Coqueteleiras','Tamanhos que você usa'],['create','➕','Criar drink','Receita nova, com foto e história'],['edit','✏️','Editar receita','Importe, ajuste e atualize ou crie nova'],['team','👥','Equipe','Convide barman e caixa'],['bars','🏠','Meus bares','Trocar de bar, criar ou entrar com convite']];
+  const MOK={barman:['qr','bars'],caixa:['bars']};
+  const M=MOK[role]?MALL.filter(m=>MOK[role].includes(m[0])):MALL;
   $('#v').innerHTML=`<h1>Mais</h1><p class="mu">${S.bar?esc(S.bar.name):''}</p><div class="list" style="margin-top:10px">
-  ${S.bar?`<div><span><b>Receber pedidos</b><br><span class="mu">${S.bar.accepting_orders?'Ligado':'Pausado'}</span></span><button class="b g" id="pz">${S.bar.accepting_orders?'Pausar':'Retomar'}</button></div>`:''}
+  ${S.bar&&role!=='caixa'?`<div><span><b>Receber pedidos</b><br><span class="mu">${S.bar.accepting_orders?'Ligado':'Pausado'}</span></span><button class="b g" id="pz">${S.bar.accepting_orders?'Pausar':'Retomar'}</button></div>`:''}
   ${M.map(m=>`<div data-s="${m[0]}" style="cursor:pointer"><span>${m[1]} <b>${m[2]}</b><br><span class="mu">${m[3]}</span></span><span>›</span></div>`).join('')}</div>`;
   $$('[data-s]').forEach(c=>c.onclick=()=>{if(c.dataset.s==='create')return recipeForm(null);S.sub=c.dataset.s;moreView()});
   const pz=$('#pz');if(pz)pz.onclick=async()=>{S.bar.accepting_orders=!S.bar.accepting_orders;await sb.from('bars').update({accepting_orders:S.bar.accepting_orders}).eq('id',S.bar.id);moreView()};
@@ -381,15 +392,59 @@ function editListView(){
 }
 function barsView(){
   const K={home:'Casa (sem preço)',counter:'Balcão (com preço e caixa)',tables:'Mesas'};
-  $('#v').innerHTML=`${S.bar?back():''}<h1>Meus bares</h1><div class="list">${S.bars.map(b=>`<div><span><b>${esc(b.name)}</b><br><span class="mu">${K[b.kind]}</span></span><span class="row"><button class="b g" data-b="${b.id}">${S.bar&&S.bar.id===b.id?'Atual':'Usar'}</button><button class="b g" data-eb="${b.id}" aria-label="Editar bar">✎</button></span></div>`).join('')}</div>
+  $('#v').innerHTML=`${S.bar?back():''}<h1>Meus bares</h1><div class="list">${S.bars.map(b=>`<div><span><b>${esc(b.name)}</b><br><span class="mu">${K[b.kind]}${b.owner!==S.user.id?' · '+(ROLE_LBL[S.roles[b.id]]||'Equipe'):''}</span></span><span class="row"><button class="b g" data-b="${b.id}">${S.bar&&S.bar.id===b.id?'Atual':'Usar'}</button>${b.owner===S.user.id?`<button class="b g" data-eb="${b.id}" aria-label="Editar bar">✎</button>`:''}</span></div>`).join('')}</div>
+  <h2 style="margin-top:24px">Entrar com convite</h2><label>Código</label><div class="row"><input id="ic" placeholder="Ex: A1B2C3D4" style="text-transform:uppercase"><button class="b g" id="ij">Entrar</button></div>
   <h2 style="margin-top:24px">Novo bar</h2><label>Nome</label><input id="bn" placeholder="Ex: Festa de sábado"><label>Tipo</label><select id="bk2"><option value="home">Casa (sem preço)</option><option value="counter">Balcão (com preço e caixa)</option></select>
   <button class="b" id="nb">Criar bar</button><button class="b g" id="out" style="width:100%;margin-top:28px">Sair (${esc(S.user.email)})</button><p class="err" id="er"></p>`;bindBack();
   $$('[data-b]').forEach(c=>c.onclick=async()=>{S.bar=S.bars.find(b=>b.id===c.dataset.b);localStorage.setItem('bar',S.bar.id);await loadBar();S.sub=null;S.tab='recipes';render()});
   $$('[data-eb]').forEach(c=>c.onclick=()=>editBar(S.bars.find(b=>b.id===c.dataset.eb)));
+  $('#ij').onclick=()=>{const c=$('#ic').value.trim();if(c)acceptSheet(c)};
   $('#nb').onclick=async()=>{const name=$('#bn').value.trim();if(!name)return $('#er').textContent='Dê um nome ao bar.';
     const {data,error}=await sb.from('bars').insert({name,kind:$('#bk2').value}).select().single();
     if(error)return $('#er').textContent=error.message;S.bars.push(data);S.bar=data;localStorage.setItem('bar',data.id);await loadBar();S.sub=null;S.tab='stock';render()};
   $('#out').onclick=async()=>{await sb.auth.signOut();if(S.ch)sb.removeChannel(S.ch);boot()};
+}
+const ROLE_LBL={owner:'Dono',barman:'Barman',caixa:'Caixa',garcom:'Garçom',cozinha:'Cozinha'};
+const inviteLink=c=>location.href.split('#')[0].split('?')[0]+'?convite='+c;
+const inviteMsg=(c,role)=>`Convite para trabalhar no ${S.bar.name} como ${ROLE_LBL[role]}.\nAbra: ${inviteLink(c)}\nCódigo: ${c}`;
+async function teamView(fresh){
+  if(myRole()!=='owner'){$('#v').innerHTML=`${back()}<p class="mu">Só o dono do bar gerencia a equipe.</p>`;return bindBack()}
+  $('#v').innerHTML=`${back()}<h1>Equipe</h1><p class="mu" style="margin-top:6px">Carregando…</p>`;bindBack();
+  const [m,iv]=await Promise.all([sb.from('bar_members').select('*').eq('bar_id',S.bar.id).order('created_at'),
+    sb.from('bar_invites').select('*').eq('bar_id',S.bar.id).is('used_at',null).gt('expires_at',new Date().toISOString()).order('created_at',{ascending:false})]);
+  const mem=m.data||[],inv=iv.data||[];
+  $('#v').innerHTML=`${back()}<h1>Equipe</h1><p class="mu" style="margin-top:6px">${esc(S.bar.name)}</p>
+  <h2 style="margin:20px 0 4px">Convidar alguém</h2><p class="mu">A pessoa cria a própria conta e entra com o código. Cada função vê só a sua tela.</p>
+  <select id="rl" style="margin-top:10px"><option value="barman">Barman: fila, receitas e estoque</option><option value="caixa">Caixa: só pagamentos</option></select>
+  <button class="b" id="gi">Gerar convite</button>
+  ${fresh?`<div class="pay" style="margin-top:14px"><div class="mu">Convite criado (${ROLE_LBL[fresh.role]})</div><div class="tt" style="letter-spacing:.12em">${fresh.code}</div>
+  <div class="row" style="margin-top:10px"><button class="b ok" id="sh" style="margin:0;flex:1">Compartilhar</button><button class="b g" id="cl">Copiar link</button></div></div>`:''}
+  <h2 style="margin:24px 0 4px">Na equipe (${mem.length})</h2><div class="list">${mem.map(x=>`<div><span><b>${esc(x.name||'Sem nome')}</b><br><span class="mu">${ROLE_LBL[x.role]||x.role}</span></span><button class="b g" data-rm="${x.user_id}">Remover</button></div>`).join('')||'<p class="mu" style="padding-top:10px">Ninguém ainda.</p>'}</div>
+  ${inv.length?`<h2 style="margin:24px 0 4px">Convites pendentes</h2><div class="list">${inv.map(x=>`<div><span><b>${x.code}</b><br><span class="mu">${ROLE_LBL[x.role]} · vale até ${new Date(x.expires_at).toLocaleDateString('pt-BR')}</span></span><span class="row"><button class="b g" data-cp="${x.code}" data-r="${x.role}">Copiar</button><button class="b g" data-cx="${x.code}" aria-label="Cancelar convite">✕</button></span></div>`).join('')}</div>`:''}`;
+  bindBack();
+  $('#gi').onclick=async()=>{$('#gi').disabled=true;const role=$('#rl').value,{data,error}=await sb.rpc('create_invite',{p_bar:S.bar.id,p_role:role});
+    if(error){$('#gi').disabled=false;return toast(error.message)}teamView({code:data,role})};
+  const send=async(code,role)=>{const t=inviteMsg(code,role);if(navigator.share){try{await navigator.share({text:t});return}catch(e){}}
+    try{await navigator.clipboard.writeText(t);toast('Convite copiado')}catch(e){prompt('Copie o convite:',t)}};
+  if(fresh){$('#sh').onclick=()=>send(fresh.code,fresh.role);$('#cl').onclick=()=>navigator.clipboard.writeText(inviteLink(fresh.code)).then(()=>toast('Link copiado'))}
+  $$('[data-cp]').forEach(c=>c.onclick=()=>send(c.dataset.cp,c.dataset.r));
+  $$('[data-cx]').forEach(c=>c.onclick=async()=>{await sb.from('bar_invites').delete().eq('code',c.dataset.cx);teamView()});
+  $$('[data-rm]').forEach(c=>c.onclick=async()=>{if(!confirm('Remover esta pessoa da equipe?'))return;await sb.from('bar_members').delete().match({bar_id:S.bar.id,user_id:c.dataset.rm});teamView()});
+}
+// Tela de convite: aparece ao abrir o link do convite ou ao digitar o código
+async function acceptSheet(code){
+  code=String(code).trim().toUpperCase();
+  const {data,error}=await sb.rpc('invite_info',{p_code:code});
+  if(error||!data)return toast('Convite inválido ou expirado');
+  const o=document.createElement('div');o.className='ov';
+  o.innerHTML=`<div class="w"><h1 style="margin-top:30px">Convite recebido</h1><p class="mu" style="margin:8px 0 18px">Você foi chamado para trabalhar como <b>${esc(ROLE_LBL[data.role]||data.role)}</b> em <b>${esc(data.bar_name)}</b>.</p>
+  <label>Seu nome na equipe</label><input id="an" value="${esc((S.user.email||'').split('@')[0])}" maxlength="40">
+  <button class="b" id="ak">Aceitar convite</button><button class="b g" id="ac" style="width:100%;margin-top:8px">Agora não</button><p class="err" id="er"></p></div>`;
+  document.body.appendChild(o);const q=s=>o.querySelector(s);q('#ac').onclick=()=>o.remove();
+  q('#ak').onclick=async()=>{q('#ak').disabled=true;
+    const r=await sb.rpc('accept_invite',{p_code:code,p_name:q('#an').value.trim()});
+    if(r.error){q('#ak').disabled=false;return q('#er').textContent=r.error.message}
+    o.remove();localStorage.setItem('bar',r.data);S.tab='recipes';S.sub=null;await boot();toast('Bem-vindo à equipe!')};
 }
 function editBar(b){
   const o=document.createElement('div');o.className='ov';
