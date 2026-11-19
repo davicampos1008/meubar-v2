@@ -1,4 +1,4 @@
-const CACHE = "meubar-v3";
+const CACHE = "meubar-v4";
 
 // Só assets estáticos. HTML sempre tenta rede primeiro (evita tela preta no PWA).
 const ASSETS = [
@@ -58,20 +58,17 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // Demais arquivos: cache, depois rede
+  // Demais arquivos: rede primeiro quando online, com fallback para cache se sem sinal
   e.respondWith(
-    caches.match(req).then((cached) =>
-      cached ||
-      fetch(req)
-        .then((res) => {
-          if (res && res.ok) {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(req, copy));
-          }
-          return res;
-        })
-        .catch(() => cached)
-    )
+    fetch(req)
+      .then((res) => {
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(req, copy));
+        }
+        return res;
+      })
+      .catch(() => caches.match(req))
   );
 });
 
