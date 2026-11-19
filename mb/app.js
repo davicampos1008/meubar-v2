@@ -71,7 +71,6 @@
     { id: "right", label: "Direita" }
   ];
 
-  // Pontos de referência no Brasil com coordenadas para ordenação por proximidade à localização atual
   var PLACES_CATALOG = [
     { label: "Asa Norte, Brasília, DF", lat: -15.7634, lon: -47.8842 },
     { label: "Asa Sul, Brasília, DF", lat: -15.8152, lon: -47.9016 },
@@ -139,7 +138,7 @@
         S.userCoords = { lat: pos.coords.latitude, lon: pos.coords.longitude };
       },
       function () {
-        S.userCoords = { lat: -15.7942, lon: -47.8822 }; // Fallback neutro (Brasília)
+        S.userCoords = { lat: -15.7942, lon: -47.8822 };
       },
       { timeout: 5000 }
     );
@@ -171,7 +170,6 @@
     return list.slice(0, 6);
   }
 
-  // Buscador de localização exata ordenando do mais próximo ao mais longe da localização atual
   function bindLocationSearchInput(rootEl, inputId, sugBoxId, latInpId, lonInpId, onSelect) {
     var inp = rootEl.querySelector("#" + inputId);
     var box = rootEl.querySelector("#" + sugBoxId);
@@ -348,6 +346,32 @@
     return pub && pub.data ? pub.data.publicUrl : "";
   }
 
+  // Insere/atualiza ignorando colunas opcionais caso alguma coluna ainda não exista no banco
+  async function writeBarSafe(mode, payload, barId) {
+    var data = Object.assign({}, payload);
+    var optionalKeys = ["handle", "city", "lat", "lon", "logo_url", "banner_url", "shakers", "tiers", "slogan", "name_font", "crest_border", "logo_pos", "name_pos", "menu_display_mode", "color_bg", "color_surface", "color_accent", "color_ok", "color_text"];
+    for (var attempt = 0; attempt < 8; attempt++) {
+      var res = mode === "insert"
+        ? await sb.from("bars").insert(data).select().single()
+        : await sb.from("bars").update(data).eq("id", barId).select().single();
+      if (!res.error) return res;
+      var msg = String(res.error.message || "");
+      var removed = false;
+      for (var i = 0; i < optionalKeys.length; i++) {
+        var k = optionalKeys[i];
+        if (k in data && msg.includes(k)) {
+          delete data[k];
+          removed = true;
+          break;
+        }
+      }
+      if (!removed) return res;
+    }
+    return await (mode === "insert"
+      ? sb.from("bars").insert({ name: payload.name, kind: payload.kind, owner: payload.owner }).select().single()
+      : sb.from("bars").update({ name: payload.name }).eq("id", barId).select().single());
+  }
+
   function toast(t) {
     var d = document.createElement("div");
     d.className = "toast";
@@ -459,7 +483,7 @@
   }
 
   async function loadJobsAndRequests() {
-    var jr = await sb.from("job_posts").select("*, bars(name, handle, city, lat, lon)").eq("is_open", true).order("created_at", { ascending: false }).limit(80);
+    var jr = await sb.from("job_posts").select("*, bars(name, handle, city)").eq("is_open", true).order("created_at", { ascending: false }).limit(80);
     S.jobs = jr.data || [];
     var ar = await sb.from("job_applications").select("*").eq("applicant_id", S.user.id);
     S.myApps = ar.data || [];
@@ -520,7 +544,8 @@
       if (handle.length < 3) { $("#er").textContent = "Escolha um @ válido (mínimo 3 caracteres)."; return; }
       var latVal = $("#bcLat").value ? Number($("#bcLat").value) : null;
       var lonVal = $("#bcLon").value ? Number($("#bcLon").value) : null;
-      var ins = await sb.from("bars").insert({
+
+      var ins = await writeBarSafe("insert", {
         name: name,
         handle: handle,
         city: $("#bc").value.trim() || null,
@@ -532,7 +557,7 @@
         owner: S.user.id,
         shakers: 2,
         tiers: [{ name: "Padrão", bonus: 0 }]
-      }).select().single();
+      });
       if (ins.error) { $("#er").textContent = ins.error.code === "23505" ? "Esse @ já está em uso." : ins.error.message; return; }
       await sb.from("bar_members").insert({ bar_id: ins.data.id, user_id: S.user.id, role: "owner", name: $("#mn").value.trim() || S.profile.display_name || "Dono" });
       localStorage.setItem("last_bar_" + S.user.id, ins.data.id);
@@ -557,7 +582,7 @@
     o.innerHTML = '<div class="w narrow"><button class="b g" id="x">← Voltar</button><div id="b" style="margin-top:12px"></div></div>';
     document.body.appendChild(o);
     o.querySelector("#x").onclick = function () { o.remove(); onboardingScreen(); };
-    if (jobsFirst) renderJobsSection(o.querySelector("#b"), null);
+    if (jobsFirst) renderJobsSection(o.querySelector("#b"));
     else renderProfileSection(o.querySelector("#b"));
   }
 
@@ -825,7 +850,7 @@
       (r.instructions ? '<h2>Modo de preparo</h2><p class="mu" style="line-height:1.6">' + esc(r.instructions) + "</p>" : "") +
       (r.story ? '<h2>História</h2><p class="mu story">' + esc(r.story) + "</p>" : "") +
       '<div class="panel" style="margin-top:18px"><label style="margin-top:0">Para quem é este drink? (opcional)</label>' +
-      '<input id="mkFor" placeholder="Ex: Para mim / Eloíza / Mesa 2">' +
+      '<input id="mkFor" placeholder="Ex: Para mim / Mesa 2">' +
       '<button class="b ok full" id="makeNowBtn" style="margin-top:12px">🍸 Fazer este drink agora</button></div></div>';
 
     document.body.appendChild(o);
@@ -917,7 +942,7 @@
     var customers = Object.keys(grouped).map(function (k) { return grouped[k]; });
 
     v.innerHTML =
-      '<button class="b g sm" id="backMoreCash">← Voltar para Mais</button>' +
+      '<button type="button" class="b g sm" id="backMoreCash">← Voltar para Mais</button>' +
       '<h1 style="margin-top:12px">Caixa</h1>' +
       '<p class="mu">' + esc(S.bar.name) + (hasPricing() ? " · Comandas em aberto" : " · Modo livre (sem cobrança)") + "</p>" +
       '<div class="pay"><div class="row sp"><span>Total em aberto</span><span class="tt">' + money(grandTotal) + "</span></div></div>" +
@@ -927,7 +952,7 @@
             return '<div style="align-items:flex-start"><div style="flex:1"><b>' + esc(c.name) + "</b>" +
               (hasPricing() ? ' · <span class="pr">' + money(c.total) + "</span>" : "") +
               '<br><span class="tag">' + esc(c.lines.join(", ")) + "</span></div>" +
-              '<button class="b sm ok" data-payidx="' + idx + '">Receber / Fechar</button></div>';
+              '<button type="button" class="b sm ok" data-payidx="' + idx + '">Receber / Fechar</button></div>';
           }).join("")
         : '<p class="mu">Nenhuma comanda pendente no caixa agora.</p>') + "</div>";
 
@@ -958,16 +983,16 @@
     });
 
     v.innerHTML =
-      '<button class="b g sm" id="bkStock">← Voltar ao Estoque</button><h1 style="margin-top:12px">Precificação do Bar</h1>' +
+      '<button type="button" class="b g sm" id="bkStock">← Voltar ao Estoque</button><h1 style="margin-top:12px">Precificação do Bar</h1>' +
       (unpricedAvailable.length
         ? '<div class="alert-box"><b>⚠️ ' + unpricedAvailable.length + ' drink(s) disponível(is) sem preço!</b><p class="mu" style="margin-top:4px">Sem preço, não aparece para o cliente: ' +
           esc(unpricedAvailable.slice(0, 6).map(function (d) { return d.name; }).join(", ")) + "</p></div>"
         : '<p class="ok-txt">✓ Todos os drinks disponíveis já possuem preço.</p>') +
       '<div class="panel"><div class="row"><div class="grow"><label>Multiplicador sobre custo base</label><input id="mkInput" type="number" step="0.1" min="1.1" value="' + esc(S.pMarkup) + '"></div>' +
       '<div class="grow"><label>Custo base padrão (R$)</label><input id="bcInput" type="number" step="0.5" min="0" value="' + esc(S.bar.base_cost || 0) + '"></div>' +
-      '<div style="align-self:flex-end"><button class="b sm g" id="saveBase">Salvar base</button></div></div>' +
-      '<div class="row" style="margin-top:12px"><button class="b sm" id="applyMissing">Sugerir para sem preço</button>' +
-      '<button class="b sm g" id="togNow">' + (S.pOnlyNow ? "Mostrando: Só os que faço" : "Filtrar: Só os que faço") + "</button></div></div>" +
+      '<div style="align-self:flex-end"><button type="button" class="b sm g" id="saveBase">Salvar base</button></div></div>' +
+      '<div class="row" style="margin-top:12px"><button type="button" class="b sm" id="applyMissing">Sugerir para sem preço</button>' +
+      '<button type="button" class="b sm g" id="togNow">' + (S.pOnlyNow ? "Mostrando: Só os que faço" : "Filtrar: Só os que faço") + "</button></div></div>" +
       '<div class="chips">' + ["all", "missing", "priced"].map(function (f) {
         return '<span class="chip ' + (S.pFilter === f ? "on" : "") + '" data-pf="' + f + '">' + (f === "all" ? "Todos" : f === "missing" ? "Sem preço" : "Com preço") + "</span>";
       }).join("") + '</div><div class="chips">' + ["Todas"].concat(CATS).map(function (c) {
@@ -978,8 +1003,8 @@
         return '<div><div style="flex:1;min-width:190px"><b>' + esc(r.name) + "</b>" + (cur == null ? '<span class="badge-warn">Sem preço</span>' : "") +
           '<br><span class="tag">Custo base: ' + money(cost) + " · Sugerido: <b>" + money(sug) + "</b></span></div>" +
           '<div class="row"><input type="number" step="0.5" min="0" data-pr="' + r.id + '" value="' + (cur != null ? esc(cur) : "") + '" placeholder="R$" style="width:88px">' +
-          '<button class="b sm g" data-sug="' + r.id + '" data-val="' + sug + '">Usar ' + money(sug) + "</button></div></div>";
-      }).join("") + '</div><button class="b full" id="savePrices" style="margin-top:14px">Salvar preços</button><p class="ok-txt" id="prMsg"></p>';
+          '<button type="button" class="b sm g" data-sug="' + r.id + '" data-val="' + sug + '">Usar ' + money(sug) + "</button></div></div>";
+      }).join("") + '</div><button type="button" class="b full" id="savePrices" style="margin-top:14px">Salvar preços</button><p class="ok-txt" id="prMsg"></p>';
 
     $("#bkStock").onclick = function () { stockView(v); };
     $("#mkInput").onchange = function () { S.pMarkup = Math.max(1.1, Number($("#mkInput").value) || 2.8); pricesView(v); };
@@ -1022,11 +1047,10 @@
     };
   }
 
-  // Vagas & Currículo: dono/gerente cria vaga e analisa currículos agrupados por vaga; funcionário vê vagas disponíveis, preenche currículo (foto de rosto obrigatória + PDF opcional) e envia solicitação à loja
   function careersView(v) {
     var mgr = isManager();
     v.innerHTML =
-      '<button class="b g sm" id="backMoreTab">← Voltar para Mais</button>' +
+      '<button type="button" class="b g sm" id="backMoreTab">← Voltar para Mais</button>' +
       '<h1 style="margin-top:12px">' + (mgr ? "Criar Vagas & Currículos Recebidos" : "Vagas Disponíveis, Currículo & Loja") + "</h1>" +
       '<div class="chips">' +
       (mgr
@@ -1064,7 +1088,7 @@
       '<div class="loc-suggest-box" id="jbLocSug" style="display:none"></div>' +
       '<label>Pagamento / Detalhes</label><input id="jbPay" placeholder="Ex: Diária ou fixo">' +
       '<label>Descrição</label><textarea id="jbDesc"></textarea>' +
-      '<button class="b sm" id="jbPub" style="margin-top:10px">Publicar vaga</button><p class="ok-txt" id="jbMsg"></p></div>';
+      '<button type="button" class="b sm" id="jbPub" style="margin-top:10px">Publicar vaga</button><p class="ok-txt" id="jbMsg"></p></div>';
 
     bindLocationSearchInput(box, "jbLoc", "jbLocSug");
     box.querySelector("#jbPub").onclick = async function () {
@@ -1133,7 +1157,7 @@
         return '<span class="chip ' + (selected.has(sk) ? "on" : "") + '" data-sk="' + esc(sk) + '">' + esc(sk) + "</span>";
       }).join("") + '</div>' +
       '<label>Resumo profissional</label><textarea id="pfBio">' + esc(p.bio || "") + "</textarea>" +
-      '<button class="b full" id="pfSave" style="margin-top:14px">Salvar currículo</button><p class="err" id="pfErr"></p><p class="ok-txt" id="pfMsg"></p></div>';
+      '<button type="button" class="b full" id="pfSave" style="margin-top:14px">Salvar currículo</button><p class="err" id="pfErr"></p><p class="ok-txt" id="pfMsg"></p></div>';
 
     box.querySelector("#pfAvatarBox").innerHTML = imageUploaderHtml("pfAv", "Foto de rosto (obrigatória — câmera ou galeria)", p.avatar_url || "");
     bindImageUploader(box, "pfAv", "avatars");
@@ -1217,7 +1241,7 @@
           '<br><span class="tag">' + esc(bName) + " · 📍 " + esc(j.location) + distTxt +
           ' · <a href="' + esc(externalMapUrl(j.bars || { city: j.location })) + '" target="_blank" rel="noopener" style="color:var(--ac)">Abrir no mapa</a></span>' +
           (j.description ? '<p class="mu" style="margin-top:6px">' + esc(j.description) + "</p>" : "") +
-          '</div><button class="b sm ' + (applied ? "g" : "") + '" ' + (applied ? "disabled" : 'data-apply="' + j.id + '"') + '>' + (applied ? "Candidatado" : "Candidatar-se") + "</button></div>";
+          '</div><button type="button" class="b sm ' + (applied ? "g" : "") + '" ' + (applied ? "disabled" : 'data-apply="' + j.id + '"') + '>' + (applied ? "Candidatado" : "Candidatar-se") + "</button></div>";
       }).join("") : '<p class="mu">Nenhuma vaga disponível no momento.</p>') + "</div>";
 
     bindLocationSearchInput(box, "fltLoc", "fltLocSug", null, null, function (chosen) {
@@ -1246,7 +1270,7 @@
       '<label>@ da loja</label><input id="svcHandle" placeholder="Ex: @minha_casa_7228">' +
       '<label>Senha da loja</label><input id="svcPass" placeholder="Senha gerada pelo dono ou gerente">' +
       '<label>Função</label><select id="svcRole"><option value="barman">Barman</option><option value="garcom">Garçom</option><option value="cozinha">Cozinha</option><option value="caixa">Caixa</option></select>' +
-      '<button class="b full" id="svcSend" style="margin-top:12px">Enviar solicitação para a loja</button><p class="ok-txt" id="svcOk"></p><p class="err" id="svcErr"></p></div>';
+      '<button type="button" class="b full" id="svcSend" style="margin-top:12px">Enviar solicitação para a loja</button><p class="ok-txt" id="svcOk"></p><p class="err" id="svcErr"></p></div>';
 
     box.querySelector("#svcSend").onclick = async function () {
       box.querySelector("#svcErr").textContent = ""; box.querySelector("#svcOk").textContent = "";
@@ -1257,11 +1281,10 @@
     };
   }
 
-  // Estúdio livre da loja (7+ elementos editáveis estilo criador de bandeira) + escolha de modo da área de drinks
   function storeStudioView(v) {
     var b = S.bar;
     v.innerHTML =
-      '<button class="b g sm" id="backMoreSt">← Voltar para Mais</button>' +
+      '<button type="button" class="b g sm" id="backMoreSt">← Voltar para Mais</button>' +
       '<h1 style="margin-top:12px">Estúdio da Loja & Cardápio</h1>' +
       '<p class="mu">Personalize a identidade livre da loja (como criação de emblema) e escolha o modo da área de drinks.</p>' +
       '<div class="panel"><h2>1. Área central de drinks (modo de exibição)</h2>' +
@@ -1293,7 +1316,7 @@
       '<div class="grow"><label>Paleta: Superfície</label><input type="color" id="stS1" value="' + esc(b.color_surface || "#141218") + '"></div>' +
       '<div class="grow"><label>Paleta: Destaque</label><input type="color" id="stAc" value="' + esc(b.color_accent || "#e5a93c") + '"></div>' +
       '<div class="grow"><label>Paleta: Texto</label><input type="color" id="stTx" value="' + esc(b.color_text || "#f6f1ea") + '"></div></div>' +
-      '<button class="b full" id="stSave" style="margin-top:16px">Salvar visual e modo do cardápio</button>' +
+      '<button type="button" class="b full" id="stSave" style="margin-top:16px">Salvar visual e modo do cardápio</button>' +
       '<p class="ok-txt" id="stMsg"></p></div>' +
       '<h2>Prévia da identidade</h2><div id="stPreview" style="margin-top:10px"></div>';
 
@@ -1352,7 +1375,7 @@
         color_accent: $("#stAc").value,
         color_text: $("#stTx").value
       };
-      var r = await sb.from("bars").update(patch).eq("id", b.id).select().single();
+      var r = await writeBarSafe("update", patch, b.id);
       if (r.error) { toast("Erro: " + r.error.message); return; }
       S.bar = r.data;
       applyBarTheme(S.bar);
@@ -1365,7 +1388,7 @@
     var o = document.createElement("div");
     o.className = "ov";
     o.innerHTML =
-      '<div class="w narrow"><button class="b g sm" id="closeQr">← Voltar</button>' +
+      '<div class="w narrow"><button type="button" class="b g sm" id="closeQr">← Voltar</button>' +
       '<h1 style="margin-top:14px">QR do cardápio</h1>' +
       '<p class="mu">Escolha Geral ou uma mesa específica para gerar o link e o QR Code.</p>' +
       '<div class="row" style="margin-top:12px">' +
@@ -1378,7 +1401,7 @@
       '<div id="qrCustomWrap" style="display:none"><label>Nome/número da mesa</label><input id="qrCustomInp" placeholder="Ex: Mesa 14 / Varanda 2"></div>' +
       '<div style="text-align:center"><div class="qr-box"><img id="qrImg" width="196" height="196" alt="QR Code"><span class="tag" id="qrLabel" style="color:#222"></span></div></div>' +
       '<p class="tag" id="qrLinkTxt" style="word-break:break-all;text-align:center"></p>' +
-      '<div class="row" style="margin-top:14px"><button class="b grow" id="qrCopyBtn">Copiar link</button>' +
+      '<div class="row" style="margin-top:14px"><button type="button" class="b grow" id="qrCopyBtn">Copiar link</button>' +
       '<a class="b g grow" id="qrOpenBtn" target="_blank" rel="noopener">Abrir cardápio</a></div></div>';
 
     document.body.appendChild(o);
@@ -1412,16 +1435,16 @@
     var o = document.createElement("div");
     o.className = "ov";
     o.innerHTML =
-      '<div class="w narrow"><button class="b g sm" id="closeSh">← Voltar</button>' +
+      '<div class="w narrow"><button type="button" class="b g sm" id="closeSh">← Voltar</button>' +
       '<h1 style="margin-top:14px">Coqueteleiras</h1>' +
       '<p class="mu">Tamanhos e quantidade de coqueteleiras que você usa.</p>' +
       '<div class="panel"><label>Quantidade de coqueteleiras</label><input id="shCount" type="number" min="1" max="50" value="' + esc(S.bar.shakers || 2) + '">' +
-      '<button class="b full" id="shSave" style="margin-top:14px">Salvar</button></div></div>';
+      '<button type="button" class="b full" id="shSave" style="margin-top:14px">Salvar</button></div></div>';
     document.body.appendChild(o);
     o.querySelector("#closeSh").onclick = function () { o.remove(); };
     o.querySelector("#shSave").onclick = async function () {
       var cnt = Math.max(1, parseInt(o.querySelector("#shCount").value, 10) || 2);
-      var r = await sb.from("bars").update({ shakers: cnt }).eq("id", S.bar.id).select().single();
+      var r = await writeBarSafe("update", { shakers: cnt }, S.bar.id);
       if (!r.error && r.data) { S.bar = r.data; toast("Coqueteleiras salvas!"); }
       o.remove();
     };
@@ -1431,7 +1454,7 @@
     var o = document.createElement("div");
     o.className = "ov";
     o.innerHTML =
-      '<div class="w narrow"><button class="b g sm" id="closeDr">← Voltar</button>' +
+      '<div class="w narrow"><button type="button" class="b g sm" id="closeDr">← Voltar</button>' +
       '<h1 style="margin-top:14px">' + (editExisting ? "Editar / Criar receita" : "Criar drink") + "</h1>" +
       (editExisting
         ? '<label>Escolha uma receita para editar ou deixe em branco para nova</label><select id="pickRec"><option value="">— Nova receita —</option>' +
@@ -1443,7 +1466,7 @@
       '<label>Ingredientes (um por linha)</label><textarea id="drIng" placeholder="Ex: 50ml Gin\n100ml Tônica\nGelo"></textarea>' +
       '<label>Modo de preparo</label><textarea id="drPrep" placeholder="Como montar ou bater o drink"></textarea>' +
       '<label>História do drink</label><textarea id="drStory" placeholder="Origem ou curiosidade"></textarea>' +
-      '<button class="b full" id="drSave" style="margin-top:14px">Salvar receita</button><p class="err" id="drErr"></p></div>';
+      '<button type="button" class="b full" id="drSave" style="margin-top:14px">Salvar receita</button><p class="err" id="drErr"></p></div>';
 
     document.body.appendChild(o);
     o.querySelector("#drImgBox").innerHTML = imageUploaderHtml("drIm", "Foto do drink (câmera ou galeria)", "");
