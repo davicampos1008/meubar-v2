@@ -1,4 +1,16 @@
 (function () {
+
+function applyMenuTheme(bar) {
+  if (!bar) return;
+  var r = document.documentElement;
+  if (bar.color_bg) r.style.setProperty("--bg", bar.color_bg);
+  if (bar.color_surface) r.style.setProperty("--card", bar.color_surface);
+  if (bar.color_accent) r.style.setProperty("--ac", bar.color_accent);
+  if (bar.color_ok) r.style.setProperty("--ok", bar.color_ok);
+  if (bar.color_text) r.style.setProperty("--tx", bar.color_text);
+  if (bar.color_bg) document.body.style.background = bar.color_bg;
+}
+
   "use strict";
   var app = document.getElementById("app");
   function esc(s) {
@@ -127,6 +139,7 @@
       }
 
       M.bar = data.bar;
+      applyMenuTheme(M.bar);
       M.items = data.items || [];
       document.title = M.bar.name;
       var nm = localStorage.getItem("nm");

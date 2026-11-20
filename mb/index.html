@@ -13,20 +13,6 @@
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
-  <script>
-    // Versão do app (aparece em Mais). Mudar este número força uma limpeza única de caches antigos.
-    window.APP_VERSION = "2026-11-20.1";
-    (function () {
-      try {
-        if (localStorage.getItem("mb_heal") === window.APP_VERSION) return;
-        localStorage.setItem("mb_heal", window.APP_VERSION);
-        var jobs = [];
-        if (navigator.serviceWorker) jobs.push(navigator.serviceWorker.getRegistrations().then(function (r) { return Promise.all(r.map(function (x) { return x.unregister(); })); }));
-        if (window.caches) jobs.push(caches.keys().then(function (k) { return Promise.all(k.map(function (x) { return caches.delete(x); })); }));
-        Promise.all(jobs).then(function () { location.reload(); });
-      } catch (e) {}
-    })();
-  </script>
 </head>
 <body>
   <div id="app"><div class="gate"><p class="mu">Carregando Meu Bar…</p></div></div>
@@ -38,14 +24,20 @@
   <script src="app.js"></script>
   <script>
     if ("serviceWorker" in navigator) {
-      var hadController = !!navigator.serviceWorker.controller, refreshing = false;
-      navigator.serviceWorker.addEventListener("controllerchange", function () {
-        if (hadController && !refreshing) { refreshing = true; location.reload(); }
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (!refreshing) {
+          refreshing = true;
+          window.location.reload();
+        }
       });
-      window.addEventListener("load", function () {
-        navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" }).then(function (reg) {
+
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("./sw.js").then((reg) => {
           reg.update();
-          document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") reg.update(); });
+          document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "visible") reg.update();
+          });
         }).catch(console.warn);
       });
     }
