@@ -1,0 +1,19 @@
+-- Receitas iniciais (só entra o que ainda não existe). Rode DEPOIS do schema.sql.
+insert into recipes (name, category, ingredients, steps, story, author_nick)
+select v.name, v.category, v.ingredients::jsonb, v.steps, v.story, v.author_nick from (values
+('Gin Tônica','Refrescantes','[{"q":"50 ml","n":"Gin"},{"q":"150 ml","n":"Água tônica"},{"q":"1 fatia","n":"Limão"},{"q":"","n":"Gelo"}]','Encha a taça com gelo, adicione o gin, complete com a tônica e finalize com o limão.','Nasceu entre soldados britânicos na Índia, que misturavam quinino (contra malária) com gin.','Meu Bar'),
+('Caipirinha','Cítricos','[{"q":"60 ml","n":"Cachaça"},{"q":"1","n":"Limão"},{"q":"2 colheres","n":"Açúcar"},{"q":"","n":"Gelo"}]','Macere o limão com o açúcar, adicione gelo e a cachaça. Misture bem.','O drink nacional do Brasil.','Meu Bar'),
+('Moscow Mule','Refrescantes','[{"q":"50 ml","n":"Vodka"},{"q":"15 ml","n":"Limão"},{"q":"120 ml","n":"Ginger beer"},{"q":"","n":"Gelo"}]','Na caneca de cobre com gelo, junte vodka e limão, complete com ginger beer.','Criado nos anos 1940 nos EUA para popularizar a vodka.','Meu Bar'),
+('Mojito','Tropicais','[{"q":"50 ml","n":"Rum"},{"q":"8 folhas","n":"Hortelã"},{"q":"1","n":"Limão"},{"q":"2 colheres","n":"Açúcar"},{"q":"","n":"Água com gás"},{"q":"","n":"Gelo"}]','Macere hortelã, limão e açúcar. Adicione gelo e rum, complete com água com gás.','Clássico cubano, bebido em Havana há mais de um século.','Meu Bar'),
+('Negroni','Fortes','[{"q":"30 ml","n":"Gin"},{"q":"30 ml","n":"Vermute"},{"q":"30 ml","n":"Campari"},{"q":"1 fatia","n":"Laranja"},{"q":"","n":"Gelo"}]','Misture tudo com gelo no copo e finalize com a laranja.','Segundo a lenda, o conde Negroni pediu um Americano com gin, em Florença (1919).','Meu Bar'),
+('Old Fashioned','Fortes','[{"q":"60 ml","n":"Whisky"},{"q":"1 colher","n":"Açúcar"},{"q":"2 dashes","n":"Angostura"},{"q":"","n":"Gelo"}]','Dissolva o açúcar com angostura, adicione whisky e gelo, mexa por 30 segundos.','Um dos coquetéis mais antigos dos EUA.','Meu Bar'),
+('Margarita','Cítricos','[{"q":"50 ml","n":"Tequila"},{"q":"20 ml","n":"Cointreau"},{"q":"20 ml","n":"Limão"},{"q":"","n":"Gelo"}]','Bata tudo na coqueteleira com gelo e coe na taça com borda de sal.','O rei dos drinks de tequila.','Meu Bar'),
+('Piña Colada','Doces & Frutados','[{"q":"50 ml","n":"Rum"},{"q":"30 ml","n":"Leite de coco"},{"q":"90 ml","n":"Suco de abacaxi"},{"q":"","n":"Gelo"}]','Bata tudo no liquidificador com gelo e sirva gelado.','Criada em Porto Rico, nos anos 1950.','Meu Bar'),
+('Aperol Spritz','Aperitivos','[{"q":"60 ml","n":"Aperol"},{"q":"90 ml","n":"Espumante"},{"q":"30 ml","n":"Água com gás"},{"q":"1 fatia","n":"Laranja"},{"q":"","n":"Gelo"}]','Na taça com gelo, junte espumante, Aperol e um toque de água com gás.','O aperitivo das tardes italianas.','Meu Bar'),
+('Cuba Libre','Refrescantes','[{"q":"50 ml","n":"Rum"},{"q":"120 ml","n":"Coca-Cola"},{"q":"1 fatia","n":"Limão"},{"q":"","n":"Gelo"}]','Gelo no copo, rum, complete com a cola e esprema o limão.','Rum com cola, em Havana, por volta de 1900.','Meu Bar'),
+('Whisky Sour','Cítricos','[{"q":"60 ml","n":"Whisky"},{"q":"30 ml","n":"Limão"},{"q":"20 ml","n":"Xarope de açúcar"},{"q":"","n":"Gelo"}]','Bata tudo na coqueteleira com gelo e coe no copo.','Equilíbrio entre ácido e doce.','Meu Bar'),
+('Tom Collins','Refrescantes','[{"q":"50 ml","n":"Gin"},{"q":"30 ml","n":"Limão"},{"q":"15 ml","n":"Xarope de açúcar"},{"q":"","n":"Água com gás"},{"q":"","n":"Gelo"}]','Misture gin, limão e xarope no copo alto com gelo e complete com água com gás.','Longo e muito refrescante.','Meu Bar')
+) as v(name, category, ingredients, steps, story, author_nick)
+where not exists (select 1 from recipes r where r.name = v.name and r.owner is null);
+
+update recipes set shaken=false where name in ('Gin Tônica','Cuba Libre','Moscow Mule','Aperol Spritz','Tom Collins','Piña Colada');

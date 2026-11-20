@@ -1,1581 +1,439 @@
-(function () {
-  "use strict";
-  var app = document.getElementById("app");
-  var MEDIA_BUCKET = "bar-media";
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],app=$('#app');
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const norm=s=>String(s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+const money=v=>'R$ '+Number(v||0).toFixed(2).replace('.',',');
+const FREE=['gelo','agua','agua gelada'];
+const CATS=['Refrescantes','Fortes','Cítricos','Tropicais','Doces & Frutados','Aperitivos'];
+const EMO=['🍋','🥃','🍊','🍹','🍓','🥂'];
+const ALL_TAGS=['Refrescante','Forte','Doce','Ácido','Charmoso','Fácil','Clássico','Tropical','Aperitivo','Longo','Curto','Com hortelã','Com soda','Frutado','Amargo'];
+const recipeTags=r=>{
+  if(Array.isArray(r.tags)&&r.tags.length)return r.tags;
+  // fallback se ainda não rodou o SQL de tags
+  const t=[];
+  if(r.category==='Refrescantes')t.push('Refrescante','Longo');
+  if(r.category==='Fortes')t.push('Forte','Curto');
+  if(r.category==='Cítricos')t.push('Ácido');
+  if(r.category==='Tropicais')t.push('Tropical');
+  if(r.category==='Doces & Frutados')t.push('Doce','Frutado');
+  if(r.category==='Aperitivos')t.push('Aperitivo');
+  return t;
+};
+const matchTags=r=>{
+  if(!S.tags.size)return true;
+  const t=new Set(recipeTags(r));
+  for(const x of S.tags)if(!t.has(x))return false;
+  return true;
+};
+const S={user:null,bars:[],bar:null,items:[],recipes:[],prices:{},orders:[],tab:'recipes',sub:null,filter:'now',cat:'Todas',q:'',icat:'Destilados',cq:'',fo:false,open:{},admin:false,pf:'none',pmk:false,psel:new Set(),pc:'Todas',pn:100,eq:'',esel:null,tags:new Set(), showTags:false};
+const stock=()=>new Set(S.items.filter(i=>i.in_stock).map(i=>norm(i.name)));
+const missing=r=>{const st=stock();return (r.ingredients||[]).filter(i=>!FREE.includes(norm(i.n))&&!st.has(norm(i.n)))};
+const tile=r=>`<div class="im c${Math.max(0,CATS.indexOf(r.category))}" style="${r.image_url?`background-image:url('${esc(r.image_url)}')`:''}">${r.image_url?'':EMO[CATS.indexOf(r.category)]||'🍸'}</div>`;
+const isCounter=()=>S.bar&&S.bar.kind==='counter';
+const vol=r=>(r.ingredients||[]).reduce((s,i)=>{const m=String(i.q).match(/([\d.,]+)\s*(ml|cl)/i);if(!m)return s;const v=parseFloat(m[1].replace(',','.'));return s+(m[2].toLowerCase()==='cl'?v*10:v)},0);
+const scale=(q,k)=>String(q).replace(/^[\d.,]+/,n=>String(+(parseFloat(n.replace(',','.'))*k).toFixed(1)).replace('.',','));
+const names=os=>[...new Set(os.map(o=>o.client_name))];
+const join=a=>a.length<2?a.join(''):a.slice(0,-1).join(', ')+' e '+a[a.length-1];
+function beep(){try{const c=new (window.AudioContext||window.webkitAudioContext)(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.frequency.value=880;g.gain.setValueAtTime(.2,c.currentTime);g.gain.exponentialRampToValueAtTime(.001,c.currentTime+.4);o.start();o.stop(c.currentTime+.4)}catch(e){}}
+function toast(t){const d=document.createElement('div');d.className='toast';d.textContent=t;document.body.appendChild(d);setTimeout(()=>d.remove(),2200)}
 
-  function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
-    });
-  }
-
-  function showErr(title, msg) {
-    app.innerHTML =
-      '<div class="gate"><h1>' + esc(title) + '</h1><p class="mu">' + esc(msg) +
-      '</p><button class="b" id="rl" style="margin-top:18px">Tentar de novo</button></div>';
-    var b = document.getElementById("rl");
-    if (b) b.onclick = function () { location.reload(); };
-  }
-
-  var URL_CFG = window.SUPABASE_URL;
-  var KEY_CFG = window.SUPABASE_ANON_KEY;
-  if (!URL_CFG || !KEY_CFG) {
-    showErr("Configuração", "Faltam SUPABASE_URL ou SUPABASE_ANON_KEY no config.js.");
-    return;
-  }
-  if (!window.supabase || !window.supabase.createClient) {
-    showErr("Biblioteca", "O Supabase não carregou. Verifique a internet e atualize a página.");
-    return;
-  }
-
-  var sb = window.supabase.createClient(URL_CFG, KEY_CFG);
-  var $ = function (s) { return document.querySelector(s); };
-  var money = function (v) { return "R$ " + Number(v || 0).toFixed(2).replace(".", ","); };
-  var CATS = ["Refrescantes", "Fortes", "Cítricos", "Tropicais", "Doces & Frutados", "Aperitivos"];
-  var EMO = ["🍋", "🥃", "🍊", "🍹", "🍓", "🥂"];
-  var ALL_TAGS = [
-    "Refrescante", "Forte", "Doce", "Ácido", "Charmoso", "Fácil",
-    "Clássico", "Tropical", "Aperitivo", "Longo", "Curto",
-    "Com hortelã", "Com soda", "Frutado", "Amargo"
-  ];
-  var ROLE_LABELS = { owner: "Dono", gerente: "Gerente", barman: "Barman", caixa: "Caixa", garcom: "Garçom", cozinha: "Cozinha", outro: "Outro" };
-  var JOB_ROLES = ["barman", "cozinha", "garcom", "caixa", "gerente", "outro"];
-  var SKILL_OPTIONS = ["Barman", "Mixologia", "Cozinha", "Garçom", "Caixa", "Gerente", "Eventos / Freelance", "Atendimento rápido"];
-
-  var DISPLAY_MODES = [
-    { id: "grid-classic", label: "Grade clássica" },
-    { id: "mode-single", label: "Fila única" },
-    { id: "mode-small-blocks", label: "Blocos pequenos" },
-    { id: "mode-list", label: "Listas" },
-    { id: "mode-columns", label: "Colunas" },
-    { id: "mode-showcase", label: "Vitrine destaque" }
-  ];
-
-  var NAME_FONTS = [
-    { id: "store-font-serif", label: "Clássica (Fraunces)" },
-    { id: "store-font-sans", label: "Moderna (DM Sans)" },
-    { id: "store-font-display", label: "Letreiro / Emblema" },
-    { id: "store-font-mono", label: "Técnica / Monospace" }
-  ];
-
-  var BORDER_STYLES = [
-    { id: "crest-border-gold", label: "Moldura Dourada" },
-    { id: "crest-border-double", label: "Borda Dupla" },
-    { id: "crest-border-dashed", label: "Tracejada de Oficina" },
-    { id: "crest-border-emblem", label: "Brasão Assimétrico" }
-  ];
-
-  var POS_OPTIONS = [
-    { id: "left", label: "Esquerda" },
-    { id: "center", label: "Centro" },
-    { id: "right", label: "Direita" }
-  ];
-
-  var PLACES_CATALOG = [
-    { label: "Asa Norte, Brasília, DF", lat: -15.7634, lon: -47.8842 },
-    { label: "Asa Sul, Brasília, DF", lat: -15.8152, lon: -47.9016 },
-    { label: "Taguatinga, Brasília, DF", lat: -15.8333, lon: -48.0567 },
-    { label: "Ceilândia, Brasília, DF", lat: -15.8178, lon: -48.1069 },
-    { label: "Sobradinho, Brasília, DF", lat: -15.6536, lon: -47.7889 },
-    { label: "Planaltina, Brasília, DF", lat: -15.6197, lon: -47.6514 },
-    { label: "Guará, Brasília, DF", lat: -15.8267, lon: -47.9778 },
-    { label: "Águas Claras, Brasília, DF", lat: -15.8344, lon: -48.0261 },
-    { label: "São Paulo, SP", lat: -23.5505, lon: -46.6333 },
-    { label: "Pinheiros, São Paulo, SP", lat: -23.5667, lon: -46.6908 },
-    { label: "Vila Madalena, São Paulo, SP", lat: -23.5525, lon: -46.6914 },
-    { label: "Rio de Janeiro, RJ", lat: -22.9068, lon: -43.1729 },
-    { label: "Copacabana, Rio de Janeiro, RJ", lat: -22.9711, lon: -43.1822 },
-    { label: "Belo Horizonte, MG", lat: -19.9167, lon: -43.9345 },
-    { label: "Curitiba, PR", lat: -25.4284, lon: -49.2733 },
-    { label: "Salvador, BA", lat: -12.9714, lon: -38.5014 },
-    { label: "Fortaleza, CE", lat: -3.7172, lon: -38.5433 },
-    { label: "Goiânia, GO", lat: -16.6869, lon: -49.2648 }
-  ];
-
-  var S = {
-    user: null,
-    userCoords: null,
-    bars: [],
-    bar: null,
-    role: null,
-    tab: "recipes",
-    items: [],
-    recipes: [],
-    prices: {},
-    orders: [],
-    settledIds: new Set(),
-    members: [],
-    jobs: [],
-    myApps: [],
-    receivedApps: [],
-    serviceReqs: [],
-    passwords: [],
-    profile: null,
-    sub: null,
-    pollId: null,
-    rFilter: "can",
-    rCat: "Todas",
-    rQuery: "",
-    rTags: new Set(),
-    showTags: false,
-    pCat: "Todas",
-    pFilter: "all",
-    pOnlyNow: false,
-    pMarkup: 2.8,
-    jobRoleFilter: "todas",
-    jobLocFilter: "",
-    jobTypeFilter: "todas"
+async function boot(){
+  const {data:{session}}=await sb.auth.getSession();
+  if(!session){S.user=null;return authView()}
+  S.user=session.user;try{const a=await sb.from('admins').select('user_id').eq('user_id',S.user.id);S.admin=!!(a.data&&a.data.length)}catch(e){S.admin=false}
+  const [b,r]=await Promise.all([sb.from('bars').select('*').order('created_at'),sb.from('recipes').select('*').order('name')]);
+  if(b.error)return authView('Erro ao carregar seus bares: '+dbMsg(b.error.message));
+  S.bars=b.data||[];S.recipes=r.data||[];
+  S.bar=S.bars.find(x=>x.id===localStorage.getItem('bar'))||S.bars[0]||null;
+  if(S.bar)await loadBar();else{S.tab='more';S.sub='bars'}
+  render();
+}
+async function loadBar(){
+  const id=S.bar.id;
+  const [i,p,o]=await Promise.all([sb.from('bar_items').select('*').eq('bar_id',id).order('name'),sb.from('bar_prices').select('*').eq('bar_id',id),
+    sb.from('orders').select('*').eq('bar_id',id).gte('created_at',new Date(Date.now()-864e5).toISOString()).order('created_at')]);
+  S.items=i.data||[];S.prices=Object.fromEntries((p.data||[]).map(x=>[x.recipe_id,x.price]));S.orders=o.data||[];
+  if(S.ch)sb.removeChannel(S.ch);
+  S.ch=sb.channel('o'+id).on('postgres_changes',{event:'*',schema:'public',table:'orders',filter:'bar_id=eq.'+id},async e=>{
+    if(e.eventType==='INSERT')beep();
+    const o=await sb.from('orders').select('*').eq('bar_id',id).gte('created_at',new Date(Date.now()-864e5).toISOString()).order('created_at');
+    S.orders=o.data||[];
+    if(document.querySelector('.ov'))return updBadge();
+    if(['queue','cash'].includes(S.tab))render();else updBadge()}).subscribe();
+}
+const pend=()=>S.orders.filter(o=>o.status==='pending').length;
+const updBadge=()=>{const b=$('.bd');if(b){b.textContent=pend();b.style.display=pend()?'':'none'}};
+const authMsg=m=>{m=String(m||'');const t=m.toLowerCase();
+  if(t.includes('rate limit'))return 'Muitos e-mails enviados em pouco tempo. Espere alguns minutos e tente de novo.';
+  if(t.includes('already registered'))return 'Este e-mail já tem conta. Toque em Entrar.';
+  if(t.includes('invalid login'))return 'E-mail ou senha incorretos.';
+  if(t.includes('not confirmed'))return 'Confirme seu e-mail antes de entrar (veja a caixa de spam).';
+  if(t.includes('password'))return 'Senha inválida: use 6 ou mais caracteres.';
+  return m};
+const dbMsg=m=>{m=String(m||'');const t=m.toLowerCase();
+  if(t.includes('row-level security')||t.includes('permission denied'))return 'Sem permissão no banco. Saia e entre de novo. Se continuar, rode o schema.sql no Supabase.';
+  if(t.includes('does not exist')||t.includes('schema cache')||t.includes('could not find'))return 'O banco está desatualizado. Rode o arquivo schema.sql no Supabase (SQL Editor). Detalhe: '+m;
+  if(t.includes('jwt')||t.includes('not authenticated'))return 'Sua sessão expirou. Saia e entre de novo.';
+  return m};
+function authView(msg=''){
+  app.innerHTML=`<div class="w" style="padding-top:10vh">${brandMark('big')}<p class="mu" style="margin:22px 0 24px;text-align:center">Receitas, estoque e pedidos do seu bar. Em qualquer celular.</p>
+  <label>E-mail</label><input id="em" type="email" autocomplete="email"><label>Senha</label><input id="pw" type="password" autocomplete="current-password" minlength="6">
+  <button class="b" id="in">Entrar</button><button class="b g" id="up" style="width:100%;margin-top:8px">Criar conta</button><p class="err" id="er">${esc(msg)}</p></div>`;
+  const go=async fn=>{if(!$('#em').value.trim()||$('#pw').value.length<6)return $('#er').textContent='Preencha o e-mail e uma senha com 6 ou mais caracteres.';const r=await sb.auth[fn]({email:$('#em').value,password:$('#pw').value});
+    if(r.error)return $('#er').textContent=authMsg(r.error.message);
+    if(fn==='signUp'&&!r.data.session)return $('#er').textContent='Conta criada! Abra o e-mail de confirmação (veja o spam) e depois toque em Entrar.';boot()};
+  $('#in').onclick=()=>go('signInWithPassword');$('#up').onclick=()=>go('signUp');
+}
+function render(){
+  const T=[['recipes','🍸','Receitas'],['stock','🍾','Estoque'],['queue','🛎️','Fila'],...(isCounter()?[['cash','💵','Caixa']]:[]),['more','⋯','Mais']];
+  app.innerHTML=`<div class="top">${brandMark()}</div><div class="w" id="v"></div><nav class="nav">${T.map(t=>`<button class="${S.tab===t[0]?'on':''}" data-nav="${t[0]}"><span>${t[1]}</span>${t[2]}${t[0]==='queue'?`<i class="bd" style="${pend()?'':'display:none'}">${pend()}</i>`:''}</button>`).join('')}</nav>`;
+  $$('[data-nav]').forEach(b=>b.onclick=()=>{S.tab=b.dataset.nav;S.sub=null;render()});
+  if(!S.bar&&S.tab!=='more'){S.tab='more';S.sub='bars'}
+  if(S.tab!=='more'&&!S.bar)return;
+  ({recipes:recipesView,stock:stockView,queue:queueView,cash:cashView,more:moreView})[S.tab]();
+}
+function recipesView(){
+  const all=S.recipes,now=all.filter(r=>!missing(r).length),one=all.filter(r=>missing(r).length===1);
+  let l=S.filter==='now'?now:S.filter==='one'?one:all;
+  if(S.cat!=='Todas')l=l.filter(r=>r.category===S.cat);
+  if(S.q)l=l.filter(r=>norm(r.name).includes(norm(S.q)));
+  l=l.filter(matchTags);
+  $('#v').innerHTML=`<div class="row sp"><div><h1>Receitas</h1><p class="mu">${esc(S.bar.name)} · você faz ${now.length}</p></div>
+  <div class="row"><button class="b g" id="tg">✨ O que tomar?</button><button class="b g" id="fl">${S.cat==='Todas'?'Categorias':esc(S.cat)} ▾</button></div></div>
+  <input id="q" placeholder="Buscar drink" value="${esc(S.q)}" style="margin-top:14px">
+  <div class="chips">${[['now','Faço agora'],['one','Falta 1'],['all','Todas']].map(f=>`<span class="chip ${S.filter===f[0]?'on':''}" data-f="${f[0]}">${f[1]}</span>`).join('')}</div>
+  ${S.fo?`<div class="chips" style="flex-wrap:wrap;overflow:visible">${['Todas',...CATS].map(c=>`<span class="chip ${S.cat===c?'on':''}" data-c="${c}">${c}</span>`).join('')}</div>`:''}
+  ${S.showTags?`<div class="chips" style="flex-wrap:wrap;overflow:visible;margin-top:4px">
+    ${ALL_TAGS.map(t=>`<span class="chip ${S.tags.has(t)?'on':''}" data-tag="${esc(t)}">${esc(t)}</span>`).join('')}
+    ${S.tags.size?`<span class="chip" id="ctags" style="border-style:dashed">Limpar filtros</span>`:''}
+  </div><p class="mu" style="margin-top:4px">${S.tags.size?S.tags.size+' filtro(s) · '+l.length+' drink(s)':''}</p>`:''}
+  <div class="grid">${l.slice(0,120).map(r=>{const m=missing(r);const tg=recipeTags(r).slice(0,2);
+    return `<button class="card" data-r="${r.id}">${tile(r)}<div class="t">${esc(r.name)}${m.length?`<br><span class="tag">falta ${m.length}</span>`:''}${tg.length?`<br><span class="tag">${esc(tg.join(' · '))}</span>`:''}</div></button>`}).join('')||'<p class="mu">Nada com esses filtros. Troque as tags ou o estoque.</p>'}</div>`;
+  $('#q').oninput=e=>{S.q=e.target.value;const p=e.target.selectionStart;recipesView();$('#q').focus();$('#q').setSelectionRange(p,p)};
+  $('#fl').onclick=()=>{S.fo=!S.fo;recipesView()};
+  $('#tg').onclick=()=>{S.showTags=!S.showTags;recipesView()};
+  $$('[data-f]').forEach(c=>c.onclick=()=>{S.filter=c.dataset.f;recipesView()});
+  $$('[data-c]').forEach(c=>c.onclick=()=>{S.cat=c.dataset.c;S.fo=false;recipesView()});
+  $$('[data-tag]').forEach(c=>c.onclick=()=>{const t=c.dataset.tag;S.tags.has(t)?S.tags.delete(t):S.tags.add(t);recipesView()});
+  const cl=$('#ctags');if(cl)cl.onclick=()=>{S.tags.clear();recipesView()};
+  $$('[data-r]').forEach(c=>c.onclick=()=>overlay(S.recipes.find(x=>x.id===c.dataset.r),1,null));
+}
+const stepsHtml=t=>{const a=String(t||'').split('\n').map(x=>x.replace(/^\s*\d+[.)]\s*/,'').trim()).filter(Boolean);return a.length?`<ol class="st">${a.map(x=>`<li><span>${esc(x)}</span></li>`).join('')}</ol>`:'<p class="mu" style="margin:8px 0 20px">Sem modo de preparo cadastrado.</p>'};
+// Tela de receita (usada no catálogo e na fila). k = multiplicador, lot = lote da fila
+function overlay(r,k,lot){
+  const st=stock(),o=document.createElement('div');o.className='ov';
+  const notes=lot?[...new Set(lot.orders.map(x=>x.note).filter(Boolean))]:[];
+  const meta=[['Copo',r.glass],['Técnica',r.technique],['Decoração',r.garnish]].filter(x=>x[1]);
+  o.innerHTML=`<div class="hero c${Math.max(0,CATS.indexOf(r.category))}" style="${r.image_url?`background-image:url('${esc(r.image_url)}')`:''}">${r.image_url?'':EMO[CATS.indexOf(r.category)]||'🍸'}</div><div class="w">
+  <div class="row sp"><button class="b g" id="x">← Voltar</button>${!lot&&canEdit(r)?'<button class="b g" id="ed">✏️ Editar</button>':''}</div><h1 style="margin-top:16px">${k>1?k+'× ':''}${esc(r.name)}</h1>
+  <p class="mu">${lot?esc(join(names(lot.orders)))+(lot.sh?' · coqueteleira '+lot.sh+' ml':''):esc(r.category)}</p>
+  ${notes.length?`<p style="margin-top:10px;color:var(--ac);font-weight:600">Obs: ${esc(notes.join(' / '))}</p>`:''}
+  ${r.verified&&!lot?`<p class="vf">✓ Receita verificada em ${(r.sources||'').split(',').filter(Boolean).length||5}+ fontes</p>`:''}
+  ${k>1?`<div class="dose"><b>${k} doses juntas</b><span>Os valores abaixo são o total para ${k}. Cada dose é a receita original.</span></div>`:''}
+  ${meta.length?`<div class="meta">${meta.map(x=>`<div><span>${x[0]}</span><b>${esc(x[1])}</b></div>`).join('')}</div>`:''}
+  <h2 style="margin:22px 0 10px">Ingredientes</h2>${(r.ingredients||[]).map(i=>{const ok=FREE.includes(norm(i.n))||st.has(norm(i.n));const q=k>1?scale(i.q,k):i.q;return `<div class="ing ${ok?'':'miss'}"><span>${esc(i.n)}</span><span class="qv">${ok?`<b>${esc(q)}</b>`:`<i>${esc(q)} · falta</i>`}${k>1&&i.q?`<small>${esc(i.q)} cada</small>`:''}</span></div>`}).join('')}
+  <h2 style="margin:22px 0 4px">Como fazer</h2>${stepsHtml(r.steps)}
+  ${r.story&&!lot?`<details class="grp"><summary>História</summary><p class="mu" style="padding:0 0 14px">${esc(r.story)}</p></details>`:''}
+  ${lot?`<button class="b ok" id="rd" style="position:sticky;bottom:12px">Pronto · chamar ${esc(join(names(lot.orders)))}</button>`:''}</div>`;
+  document.body.appendChild(o);$('.ov #x').onclick=()=>o.remove();
+  const eb=o.querySelector('#ed');if(eb)eb.onclick=()=>{o.remove();recipeForm(r)};
+  if(lot)$('#rd').onclick=async()=>{
+    $('#rd').disabled=true;
+    await sb.from('orders').update({status:'ready',ready_at:new Date().toISOString()}).in('id',lot.orders.map(x=>x.id));
+    lot.orders.forEach(x=>x.status='ready');
+    o.innerHTML=`<div class="call">Chame:<br><span style="color:var(--ok)">${esc(join(names(lot.orders)))}</span></div><div class="w"><button class="b ok" id="ok">Próximo pedido</button></div>`;
+    $('.ov #ok').onclick=()=>{o.remove();render()}};
+}
+// Mescla pedidos iguais e distribui nas coqueteleiras (metade do volume é gelo)
+function lots(){
+  const by={},cap=Math.max(...S.bar.shakers)/2,out=[];
+  S.orders.filter(o=>o.status==='pending').forEach(o=>{
+    const r=S.recipes.find(x=>x.id===o.recipe_id);if(!r)return;
+    const key=r.shaken?r.id+'|'+norm(o.note||''):o.id;(by[key]=by[key]||{r,units:[]}).units.push(o)});
+  Object.values(by).forEach(g=>{
+    const v=vol(g.r)||60;let cur=[],ml=0,n=0;
+    const flush=()=>{if(cur.length){const sh=g.r.shaken?[...S.bar.shakers].sort((a,b)=>a-b).find(s=>s/2>=ml)||Math.max(...S.bar.shakers):null;out.push({r:g.r,orders:cur,n,ml,sh})}cur=[];ml=0;n=0};
+    g.units.forEach(o=>{const add=v*o.qty;if(cur.length&&ml+add>cap)flush();cur.push(o);ml+=add;n+=o.qty});flush()});
+  return out.sort((a,b)=>a.orders[0].created_at<b.orders[0].created_at?-1:1);
+}
+function queueView(){
+  const L=lots(),R=S.orders.filter(o=>o.status==='ready');
+  $('#v').innerHTML=`<div class="row sp"><h1>Fila</h1><span class="mu">${esc(S.bar.name)}${S.bar.accepting_orders?'':' · pausado'}</span></div>
+  ${L.length?`<div class="tks" style="margin-top:18px">${L.map((l,i)=>`<button class="tk" data-l="${i}"><span class="q">${l.n}×</span><span><div class="n">${esc(l.r.name)}</div><div class="p">${esc(join(names(l.orders)))}</div></span><span class="s">${l.sh?'coq. '+l.sh+' ml':'no copo'}</span></button>`).join('')}</div>`
+  :'<p class="mu" style="margin-top:24px">Nenhum pedido na fila. Quando alguém pedir pelo QR, aparece aqui.</p>'}
+  ${R.length?`<h2 style="margin:28px 0 8px">Prontos, aguardando retirada</h2><div class="list">${R.map(o=>`<div><span><b>${esc(o.client_name)}</b> · ${o.qty}× ${esc((S.recipes.find(r=>r.id===o.recipe_id)||{}).name)}</span><button class="b g" data-e="${o.id}">Entregue</button></div>`).join('')}</div>`:''}`;
+  $$('[data-l]').forEach(c=>c.onclick=()=>{const l=L[c.dataset.l];overlay(l.r,l.n,l)});
+  $$('[data-e]').forEach(c=>c.onclick=async()=>{await sb.from('orders').update({status:'done'}).eq('id',c.dataset.e);const o=S.orders.find(x=>x.id===c.dataset.e);o.status='done';queueView()});
+}
+function cashView(){
+  const live=S.orders.filter(o=>!o.paid),by={};
+  live.forEach(o=>{(by[norm(o.client_name)]=by[norm(o.client_name)]||[]).push(o)});
+  const tot=os=>os.reduce((s,o)=>s+o.qty*(o.price||0),0);
+  const paid=S.orders.filter(o=>o.paid),rec=tot(paid),rest=tot(live);
+  const g=Object.values(by).filter(os=>!S.cq||norm(os[0].client_name).includes(norm(S.cq)));
+  $('#v').innerHTML=`<h1>Caixa</h1><div class="row" style="margin:14px 0"><div class="pay" style="flex:1;margin:0"><div class="mu">Recebido</div><div class="tt">${money(rec)}</div></div><div class="pay" style="flex:1;margin:0"><div class="mu">A receber</div><div class="tt" style="color:var(--tx)">${money(rest)}</div></div></div>
+  <input id="cq" placeholder="Buscar pelo nome" value="${esc(S.cq)}" style="margin-bottom:14px">
+  ${g.map((os,i)=>`<div class="pay"><div class="row sp"><b style="font-size:1.2rem">${esc(os[0].client_name)}</b><span class="tt">${money(tot(os))}</span></div>
+  <p class="mu" style="margin:6px 0 10px">${os.map(o=>`${o.qty}× ${esc((S.recipes.find(r=>r.id===o.recipe_id)||{}).name)}${o.status==='pending'?' (preparando)':''}`).join(', ')}</p><button class="b ok" data-p="${i}" style="margin:0">Marcar como pago</button></div>`).join('')||'<p class="mu">Nenhuma conta aberta.</p>'}`;
+  $('#cq').oninput=e=>{S.cq=e.target.value;const p=e.target.selectionStart;cashView();$('#cq').focus();$('#cq').setSelectionRange(p,p)};
+  $$('[data-p]').forEach(c=>c.onclick=async()=>{const os=g[c.dataset.p];await sb.from('orders').update({paid:true}).in('id',os.map(o=>o.id));os.forEach(o=>o.paid=true);cashView()});
+}
+const allCat=()=>Object.keys(CAT).flatMap(c=>CAT[c].map(n=>({c,...parse(n)})));
+const catItem=n=>allCat().find(x=>norm(x.name)===norm(n))||null;
+const findCat=n=>catItem(n)||{c:'Outros',name:n,vars:[],custom:true};
+// Itens que, se o usuário tiver, liberam receitas (falta só 1 ingrediente)
+function unlockTips(){
+  const m={};S.recipes.forEach(r=>{const x=missing(r);if(x.length===1)(m[norm(x[0].n)]=m[norm(x[0].n)]||{n:x[0].n,l:[]}).l.push(r.name)});
+  return Object.values(m).sort((a,b)=>b.l.length-a.l.length);
+}
+const barPick=()=>S.bars.length>1?`<select id="bs" class="bsel" aria-label="Escolher bar">${S.bars.map(b=>`<option value="${b.id}" ${S.bar.id===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select>`:`<p class="mu">${esc(S.bar.name)}</p>`;
+function stockView(){
+  const q=S.sq||'',lvc=l=>(LV.find(x=>x[0]===l)||LV[0])[1],T=unlockTips();
+  const mine=S.items.filter(i=>!q||[i.name,i.brand,i.variant].some(x=>norm(x||'').includes(norm(q))));
+  const sub=i=>QTY.includes(i.category)?(i.variant||'unidades'):([i.brand,i.variant,i.size_ml?i.size_ml+' ml':''].filter(Boolean).join(' · ')||'sem detalhes');
+  const row=i=>`<div><span data-ed="${i.id}" style="flex:1;cursor:pointer"><b class="${i.in_stock?'':'off'}">${esc(i.name)}</b><br><span class="mu">${esc(sub(i))}</span></span>${QTY.includes(i.category)
+    ?`<span class="row"><button class="lv st0" data-qm="${i.id}" aria-label="Menos">−</button><b style="min-width:22px;text-align:center">${i.qty??0}</b><button class="lv st0" data-qp="${i.id}" aria-label="Mais">+</button></span>`
+    :`<button class="lv ${i.level}" data-lv="${i.id}">${lvc(i.level)}</button>`}</div>`;
+  const groups=Object.keys(CAT).map(c=>({c,l:mine.filter(i=>i.category===c)})).filter(g=>g.l.length);
+  $('#v').innerHTML=`<div class="row sp"><div style="min-width:0;flex:1"><h1>Estoque</h1>${barPick()}<p class="mu">${S.items.length} itens</p></div>${T.length?`<button class="tip" id="tp" aria-label="Itens que liberam receitas">💡 ${T.length}</button>`:''}</div>
+  <button class="b" id="ad">+ Adicionar item</button>
+  ${S.items.length>6?`<input id="sq" placeholder="Buscar no meu estoque" value="${esc(q)}" style="margin-top:12px">`:''}
+  <div style="margin-top:12px">${groups.map(g=>`<details class="grp" data-g="${esc(g.c)}" ${(q||(S.open[g.c]!==undefined?S.open[g.c]:groups.length<=2))?'open':''}><summary><span>${esc(g.c)} <span class="mu">${g.l.length}</span></span></summary><div class="list">${g.l.map(row).join('')}</div></details>`).join('')||'<p class="mu" style="padding-top:14px">Seu estoque está vazio. Toque em “Adicionar item” para começar.</p>'}</div>`;
+  $('#ad').onclick=picker;if($('#bs'))$('#bs').onchange=async e=>{S.bar=S.bars.find(b=>b.id===e.target.value);localStorage.setItem('bar',S.bar.id);await loadBar();render()};if($('#tp'))$('#tp').onclick=tipsView;
+  if($('#sq'))$('#sq').oninput=e=>{S.sq=e.target.value;const p=e.target.selectionStart;stockView();$('#sq').focus();$('#sq').setSelectionRange(p,p)};
+  $$('details[data-g]').forEach(d=>d.ontoggle=()=>{S.open[d.dataset.g]=d.open});
+  $$('[data-ed]').forEach(c=>c.onclick=()=>{const it=S.items.find(i=>i.id===c.dataset.ed);itemSheet(it,catItem(it.name)||{c:it.category,name:it.name,vars:[]})});
+  $$('[data-lv]').forEach(c=>c.onclick=async()=>{const it=S.items.find(i=>i.id===c.dataset.lv),n=LV[(LV.findIndex(x=>x[0]===it.level)+1)%4][0];
+    it.level=n;it.in_stock=n!=='empty';await sb.from('bar_items').update({level:n,in_stock:it.in_stock}).eq('id',it.id);stockView()});
+  const step=d=>async c=>{const it=S.items.find(i=>i.id===c.dataset[d>0?'qp':'qm']);it.qty=Math.max(0,(it.qty||0)+d);it.in_stock=it.qty>0;
+    await sb.from('bar_items').update({qty:it.qty,in_stock:it.in_stock}).eq('id',it.id);stockView()};
+  $$('[data-qm]').forEach(c=>c.onclick=()=>step(-1)(c));$$('[data-qp]').forEach(c=>c.onclick=()=>step(1)(c));
+}
+// Menu para achar a classe (ou pesquisar) e adicionar um item
+function picker(){
+  const o=document.createElement('div');o.className='ov';let q='',cat=null,res=[];
+  const has=n=>S.items.some(i=>norm(i.name)===norm(n));
+  const close=()=>{o.remove();S.pk=null};
+  o.innerHTML=`<div class="w"><button class="b g" id="x">← Voltar</button><h1 style="margin:14px 0 4px">Adicionar item</h1><p class="mu" id="pc"></p>
+  <input id="pq2" placeholder="Pesquisar (ex: vermute, xarope de morango)" style="margin-top:10px"><div class="list" id="pl" style="margin-top:8px"></div></div>`;
+  document.body.appendChild(o);
+  const draw=()=>{
+    const qs=q.trim();res=qs?allCat().filter(x=>norm(x.name).includes(norm(qs))):cat?CAT[cat].map(n=>({c:cat,...parse(n)})):[];
+    o.querySelector('#pc').textContent=qs?'':cat||'Escolha uma classe';
+    o.querySelector('#pl').innerHTML=(!qs&&!cat)?Object.keys(CAT).map(c=>`<div data-k="${esc(c)}" style="cursor:pointer"><span><b>${esc(c)}</b><br><span class="mu">${CAT[c].length} opções · ${S.items.filter(i=>i.category===c).length} no seu bar</span></span><span>›</span></div>`).join('')
+      :res.map((x,k)=>`<div data-p="${k}" style="cursor:pointer"><span><b>${esc(x.name)}</b>${qs?`<br><span class="mu">${esc(x.c)}</span>`:''}</span><span class="${has(x.name)?'mu':''}">${has(x.name)?'já tem · +':'+'}</span></div>`).join('')
+      +(qs&&!res.some(x=>norm(x.name)===norm(qs))?`<div data-cu="1" style="cursor:pointer"><span><b>Adicionar “${esc(qs)}”</b><br><span class="mu">Não está na lista? Cadastre como novo item</span></span><span>+</span></div>`:'');
+    o.querySelectorAll('[data-k]').forEach(c=>c.onclick=()=>{cat=c.dataset.k;draw()});
+    o.querySelectorAll('[data-p]').forEach(c=>c.onclick=()=>itemSheet(null,res[c.dataset.p]));
+    o.querySelectorAll('[data-cu]').forEach(c=>c.onclick=()=>itemSheet(null,{c:cat||'Outros',name:qs,vars:[],custom:true}));
   };
+  S.pk=draw;draw();
+  o.querySelector('#x').onclick=()=>{if(cat&&!q.trim()){cat=null;draw()}else close()};
+  o.querySelector('#pq2').oninput=e=>{q=e.target.value;draw()};
+}
+function tipsView(){
+  const o=document.createElement('div');o.className='ov',T=unlockTips();
+  o.innerHTML=`<div class="w"><button class="b g" id="x">← Voltar</button><h1 style="margin:14px 0 4px">Falta algo?</h1><p class="mu">Estes itens liberariam mais receitas. Se você já tem algum e esqueceu de cadastrar, toque em “Eu tenho”.</p>
+  <div class="list" style="margin-top:12px">${T.map((t,k)=>`<div><span style="flex:1"><b>${esc(t.n)}</b><br><span class="mu">libera ${t.l.length}: ${esc(t.l.slice(0,4).join(', '))}${t.l.length>4?'…':''}</span></span><button class="b g" data-h="${k}">Eu tenho</button></div>`).join('')||'<p class="mu" style="padding-top:10px">Nenhuma sugestão agora.</p>'}</div></div>`;
+  document.body.appendChild(o);o.querySelector('#x').onclick=()=>o.remove();
+  o.querySelectorAll('[data-h]').forEach(c=>c.onclick=()=>{o.remove();itemSheet(null,findCat(T[c.dataset.h].n))});
+}
+function itemSheet(it,b){
+  const o=document.createElement('div');o.className='ov';
+  const qm=QTY.includes(b.c);let lv=it?it.level:'full',sz=it?it.size_ml:null,qt=it&&it.qty!=null?it.qty:1;
+  const chips=(arr,cur,k)=>arr.map(v=>`<span class="chip ${String(v)===String(cur)?'on':''}" data-${k}="${esc(v)}">${esc(v)}</span>`).join('');
+  o.innerHTML=`<div class="w"><button class="b g" id="x">← Voltar</button>
+  ${b.custom?`<h1 style="margin-top:14px">Novo item</h1><label>Nome</label><input id="nm" value="${esc(b.name)}"><label>Classe</label><select id="cc">${Object.keys(CAT).map(c=>`<option ${c===b.c?'selected':''}>${c}</option>`).join('')}</select>`:`<h1 style="margin-top:14px">${esc(b.name)}</h1><p class="mu">${esc(b.c)}</p>`}
+  ${qm?'':`<label>Marca</label><input id="br" list="bl" value="${esc(it?it.brand:'')}" placeholder="Escolha ou digite"><datalist id="bl">${(BRANDS[b.name]||'').split(',').filter(Boolean).map(x=>`<option value="${esc(x)}">`).join('')}</datalist>`}
+  ${b.vars.length?`<label>Tipo, sabor ou tom</label><div class="chips" id="vc">${chips(b.vars,it&&it.variant,'v')}</div>`:''}
+  <input id="vr" value="${esc(it?it.variant:'')}" placeholder="${b.vars.length?'Ou digite outro':'Tipo, sabor ou tom (opcional)'}" style="${b.vars.length?'':'margin-top:14px'}">
+  ${qm?`<label>Quantidade</label><div class="row"><button class="lv st0" id="qm">−</button><input id="qt" type="number" inputmode="numeric" min="0" value="${qt}" style="text-align:center"><button class="lv st0" id="qp">+</button></div>`
+  :`${(SIZES[b.c]||[]).length?`<label>Tamanho da garrafa (ml)</label><div class="chips" id="sc">${chips(SIZES[b.c],sz,'z')}</div><input id="sz" type="number" inputmode="numeric" value="${sz||''}" placeholder="Outro tamanho em ml">`:''}
+  <label>Quanto tem?</label><div class="chips" id="lc">${LV.map(l=>`<span class="chip ${l[0]===lv?'on':''}" data-l="${l[0]}">${l[1]}</span>`).join('')}</div>`}
+  <button class="b" id="sv">${it?'Salvar':'Adicionar ao bar'}</button>${it?'<button class="b g" id="rm" style="width:100%;margin-top:8px">Remover do bar</button>':''}<p class="err" id="er"></p></div>`;
+  document.body.appendChild(o);const q=s=>o.querySelector(s);q('#x').onclick=()=>o.remove();
+  const cc=q('#cc');if(cc)cc.onchange=()=>{const nm=q('#nm').value;o.remove();itemSheet(it,{...b,c:cc.value,name:nm})};
+  o.querySelectorAll('[data-v]').forEach(c=>c.onclick=()=>{q('#vr').value=c.dataset.v;o.querySelectorAll('[data-v]').forEach(x=>x.classList.toggle('on',x===c))});
+  o.querySelectorAll('[data-z]').forEach(c=>c.onclick=()=>{q('#sz').value=c.dataset.z;o.querySelectorAll('[data-z]').forEach(x=>x.classList.toggle('on',x===c))});
+  o.querySelectorAll('[data-l]').forEach(c=>c.onclick=()=>{lv=c.dataset.l;o.querySelectorAll('[data-l]').forEach(x=>x.classList.toggle('on',x===c))});
+  if(qm){q('#qm').onclick=()=>q('#qt').value=Math.max(0,(+q('#qt').value||0)-1);q('#qp').onclick=()=>q('#qt').value=(+q('#qt').value||0)+1}
+  const done=async()=>{S.items=(await sb.from('bar_items').select('*').eq('bar_id',S.bar.id).order('name')).data||[];o.remove();stockView();if(S.pk)S.pk()};
+  q('#sv').onclick=async()=>{
+    const name=b.custom?q('#nm').value.trim():b.name;if(!name)return q('#er').textContent='Dê um nome ao item.';
+    const c=b.custom&&cc?cc.value:b.c;q('#sv').disabled=true;const z=q('#sz'),br=q('#br'),qe=q('#qt'),n=qe?Math.max(0,parseInt(qe.value)||0):null;
+    const row={brand:br&&br.value.trim()||null,variant:q('#vr').value.trim()||null,size_ml:z&&z.value?parseInt(z.value):null,level:qm?'full':lv,qty:qm?n:null,in_stock:qm?n>0:lv!=='empty'};
+    const r=it?await sb.from('bar_items').update(row).eq('id',it.id):await sb.from('bar_items').insert({...row,bar_id:S.bar.id,category:c,name});
+    if(r.error){q('#sv').disabled=false;return q('#er').textContent=r.error.message}done()};
+  if(it)q('#rm').onclick=async()=>{await sb.from('bar_items').delete().eq('id',it.id);done()};
+}
+function moreView(){
+  if(S.sub)return ({edit:editListView,bars:barsView,qr:qrView,prices:pricesView,shakers:shakersView})[S.sub]();
+  const M=[['qr','📱','QR do cardápio','Para convidados ou clientes'],...(isCounter()?[['prices','💰','Preços','Defina o valor de cada drink']]:[]),['shakers','🧴','Coqueteleiras','Tamanhos que você usa'],['create','➕','Criar drink','Receita nova, com foto e história'],['edit','✏️','Editar receita','Importe, ajuste e atualize ou crie nova'],['bars','🏠','Meus bares','Trocar ou criar bar']];
+  $('#v').innerHTML=`<h1>Mais</h1><p class="mu">${S.bar?esc(S.bar.name):''}</p><div class="list" style="margin-top:10px">
+  ${S.bar?`<div><span><b>Receber pedidos</b><br><span class="mu">${S.bar.accepting_orders?'Ligado':'Pausado'}</span></span><button class="b g" id="pz">${S.bar.accepting_orders?'Pausar':'Retomar'}</button></div>`:''}
+  ${M.map(m=>`<div data-s="${m[0]}" style="cursor:pointer"><span>${m[1]} <b>${m[2]}</b><br><span class="mu">${m[3]}</span></span><span>›</span></div>`).join('')}</div><p class="mu" style="margin-top:18px;text-align:center;font-size:12px">Versão ${window.APP_VERSION||'?'}</p>`;
+  $$('[data-s]').forEach(c=>c.onclick=()=>{if(c.dataset.s==='create')return recipeForm(null);S.sub=c.dataset.s;moreView()});
+  const pz=$('#pz');if(pz)pz.onclick=async()=>{S.bar.accepting_orders=!S.bar.accepting_orders;await sb.from('bars').update({accepting_orders:S.bar.accepting_orders}).eq('id',S.bar.id);moreView()};
+}
+const back=()=>`<button class="b g" id="bk" style="margin-bottom:14px">← Voltar</button>`;
+const bindBack=()=>{const b=$('#bk');if(b)b.onclick=()=>{S.sub=null;render()}};
+function qrView(){
+  const url=new URL('menu.html?bar='+S.bar.id,location.href).href,q=qrcode(0,'M');q.addData(url);q.make();
+  $('#v').innerHTML=`${back()}<h1>QR do cardápio</h1><p class="mu" style="margin-top:6px">${S.bar.kind==='home'?'Seus convidados veem os drinks que você consegue fazer e pedem pelo nome.':'Clientes veem os drinks com preço e pedem pelo nome.'}</p>
+  <div class="qr">${q.createSvgTag({cellSize:6,margin:0,scalable:true})}</div><p class="mu" style="word-break:break-all;text-align:center">${esc(url)}</p>
+  <button class="b" id="cp">Copiar link</button><button class="b g" id="pr" style="width:100%;margin-top:8px">Imprimir</button>`;
+  bindBack();$('#cp').onclick=()=>navigator.clipboard.writeText(url).then(()=>toast('Link copiado'));$('#pr').onclick=()=>print();
+}
+function pricesView(){
+  const q=S.pq||'',f=S.pf,tiers=S.bar.tiers&&S.bar.tiers.length?S.bar.tiers.map(Number):[20,28,36];
+  const priced=S.recipes.filter(r=>S.prices[r.id]!=null).length;
+  const l=S.recipes.filter(r=>(!q||norm(r.name).includes(norm(q)))&&(S.pc==='Todas'||r.category===S.pc)&&(f==='all'||(f==='none'?S.prices[r.id]==null:S.prices[r.id]!=null))&&(!S.pmk||!missing(r).length));
+  const shown=l.slice(0,S.pn),n=S.psel.size;
+  const row=r=>`<div><span class="row" style="flex:1;gap:12px"><input type="checkbox" class="ck" data-ck="${r.id}" ${S.psel.has(r.id)?'checked':''} aria-label="Selecionar ${esc(r.name)}"><span><b>${esc(r.name)}</b><br><span class="mu">${esc(r.category)}</span></span></span><input class="pi" type="number" inputmode="decimal" step="0.5" min="0" data-p="${r.id}" value="${S.prices[r.id]??''}" placeholder="R$"></div>`;
+  $('#v').innerHTML=`${back()}<h1>Preços</h1><p class="mu" style="margin-top:6px">${priced} de ${S.recipes.length} com preço. Só entram no cardápio os drinks com preço e ingredientes em estoque.</p>
+  <input id="pq" placeholder="Buscar drink" value="${esc(q)}" style="margin-top:12px">
+  <div class="chips">${[['none','Sem preço'],['with','Com preço'],['all','Todos']].map(x=>`<span class="chip ${f===x[0]?'on':''}" data-pf="${x[0]}">${x[1]}</span>`).join('')}<span class="chip ${S.pmk?'on':''}" id="mk">Só os que faço agora</span></div>
+  <select id="pcat">${['Todas',...CATS].map(c=>`<option ${S.pc===c?'selected':''}>${c}</option>`).join('')}</select>
+  <details class="grp" style="margin-top:8px"><summary>Ferramentas de preço</summary>
+    <label>Faixas de preço (atalhos)</label><div class="row">${tiers.map((t,i)=>`<input type="number" inputmode="decimal" data-t="${i}" value="${t}">`).join('')}</div>
+    <label>Reajustar todos os preços em %</label><div class="row"><input id="pct" type="number" inputmode="decimal" placeholder="Ex: 10 ou -5"><button class="b g" id="pa">Aplicar</button></div></details>
+  <div class="row sp" style="margin-top:14px"><label class="row" style="margin:0;color:var(--tx);gap:12px"><input type="checkbox" class="ck" id="all" ${l.length&&l.every(r=>S.psel.has(r.id))?'checked':''}> Selecionar todos (${l.length})</label><span class="mu">${n} selecionado${n===1?'':'s'}</span></div>
+  <div class="list">${shown.map(row).join('')||'<p class="mu" style="padding-top:12px">Nada nesta lista.</p>'}</div>
+  ${l.length>shown.length?`<button class="b g" id="more" style="width:100%;margin-top:10px">Mostrar mais (${l.length-shown.length})</button>`:''}
+  <div style="height:${n?150:20}px"></div>
+  ${n?`<div class="dock dk2"><div class="row"><input id="bulk" type="number" inputmode="decimal" step="0.5" placeholder="R$ para ${n} drink${n===1?'':'s'}"><button class="b ok" id="bo" style="margin:0;width:auto">Aplicar</button></div><div class="chips" style="padding-bottom:0">${tiers.map(t=>`<span class="chip" data-tp="${t}">${money(t)}</span>`).join('')}<span class="chip" id="rm">Remover preço</span></div></div>`:''}`;
+  bindBack();
+  $('#pq').oninput=e=>{S.pq=e.target.value;S.pn=100;const p=e.target.selectionStart;pricesView();$('#pq').focus();$('#pq').setSelectionRange(p,p)};
+  $$('[data-pf]').forEach(c=>c.onclick=()=>{S.pf=c.dataset.pf;S.pn=100;pricesView()});
+  $('#mk').onclick=()=>{S.pmk=!S.pmk;S.pn=100;pricesView()};
+  $('#pcat').onchange=e=>{S.pc=e.target.value;S.pn=100;pricesView()};
+  $('#all').onchange=e=>{l.forEach(r=>e.target.checked?S.psel.add(r.id):S.psel.delete(r.id));pricesView()};
+  $$('[data-ck]').forEach(c=>c.onchange=()=>{c.checked?S.psel.add(c.dataset.ck):S.psel.delete(c.dataset.ck);pricesView()});
+  if($('#more'))$('#more').onclick=()=>{S.pn+=100;pricesView()};
+  $$('[data-p]').forEach(i=>i.onchange=async()=>{const id=i.dataset.p,v=parseFloat(i.value.replace(',','.'));
+    if(isNaN(v)){await sb.from('bar_prices').delete().match({bar_id:S.bar.id,recipe_id:id});delete S.prices[id]}
+    else{await sb.from('bar_prices').upsert({bar_id:S.bar.id,recipe_id:id,price:v});S.prices[id]=v}toast('Preço salvo')});
+  $$('[data-t]').forEach(i=>i.onchange=async()=>{const a=[...tiers];a[i.dataset.t]=parseFloat(i.value)||0;S.bar.tiers=a;await sb.from('bars').update({tiers:a}).eq('id',S.bar.id);toast('Faixa salva');pricesView()});
+  const apply=async v=>{const ids=[...S.psel],{error}=await sb.from('bar_prices').upsert(ids.map(id=>({bar_id:S.bar.id,recipe_id:id,price:v})));
+    if(error)return toast(error.message);ids.forEach(id=>S.prices[id]=v);S.psel.clear();toast(ids.length+' preço(s) definidos');pricesView()};
+  if($('#bo'))$('#bo').onclick=()=>{const v=parseFloat($('#bulk').value.replace(',','.'));if(isNaN(v)||v<0)return toast('Digite um preço');apply(v)};
+  $$('[data-tp]').forEach(c=>c.onclick=()=>apply(Number(c.dataset.tp)));
+  if($('#rm'))$('#rm').onclick=async()=>{const ids=[...S.psel];await sb.from('bar_prices').delete().eq('bar_id',S.bar.id).in('recipe_id',ids);ids.forEach(id=>delete S.prices[id]);S.psel.clear();toast('Preço removido');pricesView()};
+  $('#pa').onclick=async()=>{const p=parseFloat($('#pct').value.replace(',','.')),es=Object.entries(S.prices);
+    if(isNaN(p)||!es.length)return toast('Digite a porcentagem');if(!confirm('Reajustar '+es.length+' preços em '+p+'%?'))return;
+    const rows=es.map(([id,v])=>({bar_id:S.bar.id,recipe_id:id,price:Math.max(0,Math.round(v*(1+p/100)*2)/2)}));
+    const {error}=await sb.from('bar_prices').upsert(rows);if(error)return toast(error.message);rows.forEach(r=>S.prices[r.recipe_id]=r.price);toast('Preços reajustados');pricesView()};
+}
+function shakersView(){
+  $('#v').innerHTML=`${back()}<h1>Coqueteleiras</h1><p class="mu" style="margin:6px 0">O app junta pedidos iguais e diz qual usar. Metade do volume é gelo.</p>
+  <div class="list">${S.bar.shakers.map((s,i)=>`<div><b>${s} ml</b><button class="b g" data-x="${i}">Remover</button></div>`).join('')}</div>
+  <label>Nova coqueteleira (ml)</label><div class="row"><input id="ns" type="number" inputmode="numeric" placeholder="500"><button class="b g" id="as">Adicionar</button></div>`;
+  bindBack();const sv=async a=>{if(!a.length)return;S.bar.shakers=a;await sb.from('bars').update({shakers:a}).eq('id',S.bar.id);shakersView()};
+  $('#as').onclick=()=>{const v=parseInt($('#ns').value);if(v>=100)sv([...S.bar.shakers,v])};
+  $$('[data-x]').forEach(c=>c.onclick=()=>sv(S.bar.shakers.filter((_,i)=>i!=c.dataset.x)));
+}
+const shrink=f=>new Promise(res=>{const i=new Image();i.onload=()=>{const k=Math.min(1,1000/Math.max(i.width,i.height)),c=document.createElement('canvas');c.width=Math.round(i.width*k);c.height=Math.round(i.height*k);c.getContext('2d').drawImage(i,0,0,c.width,c.height);c.toBlob(b=>res(b||f),'image/jpeg',.82)};i.onerror=()=>res(f);i.src=URL.createObjectURL(f)});
+async function upPhoto(f){const b=await shrink(f),p=`${S.user.id}/${Date.now()}.jpg`,u=await sb.storage.from('recipes').upload(p,b,{contentType:'image/jpeg'});if(u.error)throw u.error;return sb.storage.from('recipes').getPublicUrl(p).data.publicUrl}
+const parseIng=t=>t.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{
+  if(l.includes('|')){const [a,...b]=l.split('|');return {q:a.trim(),n:b.join('|').trim()}}
+  const m=l.match(/^([\d.,\/]+\s*(?:ml|cl|g|kg|dashes?|gotas?|folhas?|colheres? de (?:chá|sopa)|colheres?|fatias?|rodelas?|gomos?|cubos?|unidades?|un|pitadas?)?)\s+(.+)$/i);
+  return m?{q:m[1].trim(),n:m[2].trim()}:{q:'',n:l}}).filter(x=>x.n);
+const ingKey=a=>(a||[]).map(i=>(i.q||'')+'|'+i.n).join('\n');
+const canEdit=r=>S.admin||(r.owner&&r.owner===S.user.id);
+// Formulário único: criar drink ou editar uma receita importada
+function recipeForm(base){
+  const o=document.createElement('div');o.className='ov';let photo=null;
+  const v=k=>base&&base[k]?esc(base[k]):'';
+  const ingTxt=base?(base.ingredients||[]).map(i=>i.q?i.q+' | '+i.n:i.n).join('\n'):'';
+  o.innerHTML=`<div class="w"><button class="b g" id="x">← Voltar</button><h1 style="margin:14px 0 4px">${base?'Editar receita':'Criar drink'}</h1>${base?`<p class="mu">Importada: ${esc(base.name)}${base.verified?' · ✓ verificada':''}</p>`:''}
+  <label>Nome</label><input id="n" value="${v('name')}">
+  <label>Categoria</label><select id="c">${CATS.map(c=>`<option ${base&&base.category===c?'selected':''}>${c}</option>`).join('')}</select>
+  <label>Descrição (aparece no cardápio do cliente)</label><textarea id="ds" style="min-height:80px">${v('description')}</textarea>
+  <label>Copo</label><input id="gl" value="${v('glass')}" placeholder="Ex: Copo baixo com gelo">
+  <label>Técnica</label><input id="te" value="${v('technique')}" placeholder="Ex: Coqueteleira, mexido, direto no copo">
+  <label>Decoração</label><input id="ga" value="${v('garnish')}" placeholder="Ex: Casca de laranja">
+  <label>Ingredientes (um por linha: quantidade | ingrediente)</label><textarea id="i" style="min-height:130px" placeholder="50 ml | Gin&#10;Gelo">${esc(ingTxt)}</textarea>
+  <label>Modo de preparo (um passo por linha)</label><textarea id="s" style="min-height:160px">${v('steps')}</textarea>
+  <label>História (opcional)</label><textarea id="h">${v('story')}</textarea>
+  <label>Foto</label><img id="pv" class="pv" alt="Foto" ${base&&base.image_url?`src="${esc(base.image_url)}"`:'hidden'}>
+  <div class="row" style="margin-top:10px"><button class="b g" id="pc" type="button">📷 Tirar foto</button><button class="b g" id="pg" type="button">🖼 Galeria</button></div>
+  <input id="fc" type="file" accept="image/*" capture="environment" hidden><input id="fg" type="file" accept="image/*" hidden>
+  <label class="row" style="margin-top:16px;color:var(--tx)"><input id="sk" type="checkbox" ${!base||base.shaken?'checked':''} style="width:auto"> Feito na coqueteleira (pode juntar pedidos)</label>
+  ${base?`<button class="b" id="up">Atualizar receita existente</button><button class="b g" id="nw" style="width:100%;margin-top:8px">Salvar como nova receita (mantém a original)</button>`:`<button class="b" id="nw">Salvar drink</button>`}
+  <p class="err" id="er"></p>${base&&base.sources?`<p class="mu" style="margin-top:14px">Fontes da verificação: ${esc(base.sources)}</p>`:''}</div>`;
+  document.body.appendChild(o);const q=s=>o.querySelector(s);q('#x').onclick=()=>o.remove();
+  const pk=e=>{photo=e.target.files[0]||null;if(photo){q('#pv').src=URL.createObjectURL(photo);q('#pv').hidden=false}};
+  q('#fc').onchange=pk;q('#fg').onchange=pk;q('#pc').onclick=()=>q('#fc').click();q('#pg').onclick=()=>q('#fg').click();
+  const lock=b=>o.querySelectorAll('#up,#nw').forEach(x=>x.disabled=b);
+  const save=async mode=>{
+    const name=q('#n').value.trim(),ing=parseIng(q('#i').value);
+    if(!name||!ing.length)return q('#er').textContent='Informe o nome e ao menos um ingrediente.';
+    lock(true);q('#er').textContent='';let url=base?base.image_url:null;
+    try{if(photo)url=await upPhoto(photo)}catch(e){lock(false);return q('#er').textContent='Não consegui enviar a foto: '+(e.message||e)}
+    const row={name:mode==='new'&&base&&name===base.name?name+' (cópia)':name,category:q('#c').value,description:q('#ds').value.trim()||null,glass:q('#gl').value.trim()||null,technique:q('#te').value.trim()||null,garnish:q('#ga').value.trim()||null,ingredients:ing,steps:q('#s').value,story:q('#h').value.trim()||null,image_url:url,shaken:q('#sk').checked};
+    let r,note='Receita salva';
+    if(mode==='update'){if(base.verified&&ingKey(ing)!==ingKey(base.ingredients)){row.verified=false;note='Atualizada. O selo de verificada saiu porque os ingredientes mudaram'}else note='Receita atualizada';
+      r=await sb.from('recipes').update(row).eq('id',base.id).select()}
+    else r=await sb.from('recipes').insert({...row,author_nick:S.user.email.split('@')[0]}).select();
+    if(r.error||!r.data||!r.data.length){lock(false);return q('#er').textContent=r.error?r.error.message:'Sem permissão para atualizar esta receita. Use "Salvar como nova" ou cadastre seu e-mail como admin (migracao-4.sql).'}
+    S.recipes=(await sb.from('recipes').select('*').order('name')).data||S.recipes;o.remove();toast(note);
+    if(S.tab==='more'&&S.sub==='edit')editListView();else if(S.tab==='recipes')recipesView();
+  };
+  if(base)q('#up').onclick=()=>save('update');q('#nw').onclick=()=>save('new');
+}
+function editListView(){
+  const q=S.eq||'',l=S.recipes.filter(r=>!q||norm(r.name).includes(norm(q))).slice(0,80);
+  $('#v').innerHTML=`${back()}<h1>Editar receita</h1><p class="mu" style="margin-top:6px">Escolha uma receita e toque em “Importar receita”.</p>
+  <input id="eq" placeholder="Buscar pelo nome" value="${esc(q)}" style="margin-top:12px">
+  <div class="list">${l.map(r=>`<div data-sel="${r.id}" class="${S.esel===r.id?'sel':''}" style="cursor:pointer"><span><b>${esc(r.name)}</b><br><span class="mu">${esc(r.category)}${r.verified?' · ✓ verificada':''}</span></span><span>${S.esel===r.id?'●':'○'}</span></div>`).join('')||'<p class="mu" style="padding-top:12px">Nenhuma receita encontrada.</p>'}</div>
+  <div style="height:90px"></div><div class="dock"><button class="b" id="imp" style="margin:0" ${S.esel?'':'disabled'}>Importar receita</button></div>`;
+  bindBack();
+  $('#eq').oninput=e=>{S.eq=e.target.value;const p=e.target.selectionStart;editListView();$('#eq').focus();$('#eq').setSelectionRange(p,p)};
+  $$('[data-sel]').forEach(c=>c.onclick=()=>{S.esel=c.dataset.sel;editListView()});
+  $('#imp').onclick=()=>{const r=S.recipes.find(x=>x.id===S.esel);if(r)recipeForm(r)};
+}
+function barsView(){
+  const K={home:'Casa (sem preço)',counter:'Balcão (com preço e caixa)',tables:'Mesas'};
+  $('#v').innerHTML=`${S.bar?back():''}<h1>Meus bares</h1><div class="list">${S.bars.map(b=>`<div><span><b>${esc(b.name)}</b><br><span class="mu">${K[b.kind]}</span></span><span class="row"><button class="b g" data-b="${b.id}">${S.bar&&S.bar.id===b.id?'Atual':'Usar'}</button><button class="b g" data-eb="${b.id}" aria-label="Editar bar">✎</button></span></div>`).join('')}</div>
+  <h2 style="margin-top:24px">Novo bar</h2><label>Nome</label><input id="bn" placeholder="Ex: Festa de sábado"><label>Tipo</label><select id="bk2"><option value="home">Casa (sem preço)</option><option value="counter">Balcão (com preço e caixa)</option></select>
+  <button class="b" id="nb">Criar bar</button><button class="b g" id="out" style="width:100%;margin-top:28px">Sair (${esc(S.user.email)})</button><p class="err" id="er"></p>`;bindBack();
+  $$('[data-b]').forEach(c=>c.onclick=async()=>{S.bar=S.bars.find(b=>b.id===c.dataset.b);localStorage.setItem('bar',S.bar.id);await loadBar();S.sub=null;S.tab='recipes';render()});
+  $$('[data-eb]').forEach(c=>c.onclick=()=>editBar(S.bars.find(b=>b.id===c.dataset.eb)));
+  $('#nb').onclick=async()=>{const name=$('#bn').value.trim();if(!name)return $('#er').textContent='Dê um nome ao bar.';
+    const {data,error}=await sb.from('bars').insert({name,kind:$('#bk2').value,owner:S.user.id}).select().single();
+    if(error)return $('#er').textContent=dbMsg(error.message);S.bars.push(data);S.bar=data;localStorage.setItem('bar',data.id);await loadBar();S.sub=null;S.tab='stock';render()};
+  $('#out').onclick=async()=>{await sb.auth.signOut();if(S.ch)sb.removeChannel(S.ch);boot()};
+}
+function editBar(b){
+  const o=document.createElement('div');o.className='ov';
+  o.innerHTML=`<div class="w"><button class="b g" id="x">← Voltar</button><h1 style="margin:14px 0 4px">Editar bar</h1><label>Nome</label><input id="en" value="${esc(b.name)}">
+  <label>Tipo</label><select id="ek"><option value="home">Casa (sem preço)</option><option value="counter">Balcão (com preço e caixa)</option></select>
+  <button class="b" id="es">Salvar</button><button class="b g" id="ed" style="width:100%;margin-top:28px;color:#ff9a8a">Excluir este bar</button><p class="err" id="er"></p></div>`;
+  document.body.appendChild(o);const q=s=>o.querySelector(s);q('#ek').value=b.kind==='counter'?'counter':'home';q('#x').onclick=()=>o.remove();
+  q('#es').onclick=async()=>{const name=q('#en').value.trim();if(!name)return q('#er').textContent='Dê um nome ao bar.';
+    const {error}=await sb.from('bars').update({name,kind:q('#ek').value}).eq('id',b.id);if(error)return q('#er').textContent=error.message;
+    b.name=name;b.kind=q('#ek').value;o.remove();render();toast('Bar atualizado')};
+  q('#ed').onclick=async()=>{
+    if(!confirm('Excluir "'+b.name+'"? O estoque, os preços e os pedidos deste bar serão apagados. Não dá para desfazer.'))return;
+    const {error}=await sb.from('bars').delete().eq('id',b.id);if(error)return q('#er').textContent=error.message;
+    S.bars=S.bars.filter(x=>x.id!==b.id);
+    if(S.bar&&S.bar.id===b.id){S.bar=S.bars[0]||null;if(S.bar){localStorage.setItem('bar',S.bar.id);await loadBar()}else{S.items=[];S.orders=[];S.prices={};S.tab='more';S.sub='bars'}}
+    o.remove();render();toast('Bar excluído')};
+}
+boot();
+// Registrar PWA
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch(console.warn);
+  });
+}
 
-  var isManager = function () { return S.role === "owner" || S.role === "gerente"; };
-  var canEditMenu = function () { return S.role === "owner" || S.role === "gerente"; };
-  var hasPricing = function () { return S.bar && S.bar.kind !== "home"; };
-
-  function detectCurrentCoords() {
-    if (S.userCoords || !navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      function (pos) {
-        S.userCoords = { lat: pos.coords.latitude, lon: pos.coords.longitude };
-      },
-      function () {
-        S.userCoords = { lat: -15.7942, lon: -47.8822 };
-      },
-      { timeout: 5000 }
-    );
+// Pedir permissão de notificação (chame depois do login ou ao abrir a fila)
+async function enableNotifications() {
+  if (!("Notification" in window)) return;
+  const perm = await Notification.requestPermission();
+  if (perm === "granted" && navigator.serviceWorker.controller) {
+    // Exemplo local (sem servidor de push ainda):
+    // new Notification("Meu Bar", { body: "Notificações ativas", icon: "./icons/icon-192.png" });
   }
-
-  function haversineKm(a, b) {
-    if (!a || !b || a.lat == null || b.lat == null) return 99999;
-    var toRad = function (d) { return (d * Math.PI) / 180; };
-    var R = 6371;
-    var dLat = toRad(b.lat - a.lat);
-    var dLon = toRad(b.lon - a.lon);
-    var x = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
-  }
-
-  function getProximitySuggestions(queryText, extraCoords) {
-    var origin = extraCoords || S.userCoords || { lat: -15.7942, lon: -47.8822 };
-    var q = String(queryText || "").trim().toLowerCase();
-    var list = PLACES_CATALOG.map(function (p) {
-      var dist = haversineKm(origin, p);
-      return { label: p.label, lat: p.lat, lon: p.lon, km: dist };
-    });
-    if (q) {
-      var matching = list.filter(function (item) { return item.label.toLowerCase().includes(q); });
-      if (matching.length) list = matching;
-    }
-    list.sort(function (a, b) { return a.km - b.km; });
-    return list.slice(0, 6);
-  }
-
-  function bindLocationSearchInput(rootEl, inputId, sugBoxId, latInpId, lonInpId, onSelect) {
-    var inp = rootEl.querySelector("#" + inputId);
-    var box = rootEl.querySelector("#" + sugBoxId);
-    if (!inp || !box) return;
-
-    var renderList = function () {
-      var val = inp.value || "";
-      if (!val.trim()) { box.style.display = "none"; return; }
-      var items = getProximitySuggestions(val);
-      box.style.display = "block";
-      box.innerHTML = items.map(function (it, idx) {
-        return '<button type="button" class="loc-suggest-item" data-sidx="' + idx + '">' +
-          '<span>📍 <b>' + esc(it.label) + '</b></span>' +
-          '<span class="tag">' + (it.km < 9000 ? it.km.toFixed(1) + " km" : "Exato") + "</span></button>";
-      }).join("");
-
-      box.querySelectorAll("[data-sidx]").forEach(function (btn) {
-        btn.onclick = function () {
-          var chosen = items[Number(btn.getAttribute("data-sidx"))];
-          if (!chosen) return;
-          inp.value = chosen.label;
-          if (latInpId && rootEl.querySelector("#" + latInpId)) rootEl.querySelector("#" + latInpId).value = chosen.lat;
-          if (lonInpId && rootEl.querySelector("#" + lonInpId)) rootEl.querySelector("#" + lonInpId).value = chosen.lon;
-          box.style.display = "none";
-          if (onSelect) onSelect(chosen);
-        };
-      });
-    };
-
-    inp.addEventListener("input", renderList);
-    inp.addEventListener("focus", renderList);
-  }
-
-  function externalMapUrl(placeOrBar) {
-    var b = placeOrBar || {};
-    if (b.lat != null && b.lon != null && b.lat !== "" && b.lon !== "") {
-      return "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(Number(b.lat) + "," + Number(b.lon));
-    }
-    var q = b.city || b.name || "Brasil";
-    return "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(q);
-  }
-
-  function slugHandle(raw) {
-    return String(raw || "")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase()
-      .replace(/[^a-z0-9_]+/g, "_")
-      .replace(/^_+|_+$/g, "")
-      .slice(0, 28);
-  }
-
-  function applyBarTheme(bar) {
-    var root = document.documentElement.style;
-    if (!bar) {
-      ["--bg", "--s1", "--ac", "--ok", "--tx"].forEach(function (k) { root.removeProperty(k); });
-      return;
-    }
-    if (bar.color_bg) root.setProperty("--bg", bar.color_bg);
-    if (bar.color_surface) root.setProperty("--s1", bar.color_surface);
-    if (bar.color_accent) root.setProperty("--ac", bar.color_accent);
-    if (bar.color_ok) root.setProperty("--ok", bar.color_ok);
-    if (bar.color_text) root.setProperty("--tx", bar.color_text);
-  }
-
-  function brandLogoHtml(bar, big) {
-    var lg = (bar && bar.logo_url) ? bar.logo_url : ((window.BRAND && window.BRAND.logo) || "logo.png");
-    var nm = (bar && bar.name) ? bar.name : ((window.BRAND && window.BRAND.name) || "Meu Bar");
-    var fontCls = (bar && bar.name_font) ? bar.name_font : "store-font-serif";
-    return (
-      '<span class="brand' + (big ? " big" : "") + '">' +
-      '<img class="logo' + (big ? " big" : "") + '" src="' + esc(lg) + '" alt="' + esc(nm) + '" onerror="this.style.display=\'none\'">' +
-      '<span><span class="bn ' + fontCls + '">' + esc(nm) + "</span></span></span>"
-    );
-  }
-
-  function imageUploaderHtml(prefix, label, currentUrl) {
-    var safeUrl = currentUrl || "";
-    return (
-      '<div class="img-picker"><label style="margin-top:0">' + esc(label) + '</label>' +
-      '<div class="row" style="align-items:flex-start">' +
-      '<img class="img-thumb" id="' + prefix + 'Thumb" src="' + esc(safeUrl || ((window.BRAND && window.BRAND.logo) || "logo.png")) + '" alt="Prévia" onerror="this.style.opacity=\'0.35\'">' +
-      '<div class="grow"><input id="' + prefix + 'Url" value="' + esc(safeUrl) + '" placeholder="Link da imagem (gerado ao enviar foto ou colado)">' +
-      '<div class="row" style="margin-top:8px">' +
-      '<button type="button" class="b sm g" id="' + prefix + 'CamBtn">📷 Tirar foto</button>' +
-      '<button type="button" class="b sm g" id="' + prefix + 'GalBtn">🖼️ Galeria</button>' +
-      '<span class="tag" id="' + prefix + 'Status"></span></div>' +
-      '<input type="file" id="' + prefix + 'CamInp" accept="image/*" capture="user" style="display:none">' +
-      '<input type="file" id="' + prefix + 'GalInp" accept="image/*" style="display:none"></div></div></div>'
-    );
-  }
-
-  async function compressImageFile(file) {
-    return new Promise(function (resolve) {
-      if (!file || !file.type || !file.type.startsWith("image/")) { resolve(file); return; }
-      var img = new Image();
-      var reader = new FileReader();
-      reader.onload = function (e) {
-        img.onload = function () {
-          var maxSide = 1100;
-          var w = img.width, h = img.height;
-          if (w > maxSide || h > maxSide) {
-            if (w >= h) { h = Math.round((h * maxSide) / w); w = maxSide; }
-            else { w = Math.round((w * maxSide) / h); h = maxSide; }
-          }
-          var canvas = document.createElement("canvas");
-          canvas.width = w;
-          canvas.height = h;
-          var ctx = canvas.getContext("2d");
-          ctx.drawImage(img, 0, 0, w, h);
-          canvas.toBlob(function (blob) {
-            resolve(blob ? new File([blob], "foto.jpg", { type: "image/jpeg" }) : file);
-          }, "image/jpeg", 0.82);
-        };
-        img.onerror = function () { resolve(file); };
-        img.src = e.target.result;
-      };
-      reader.onerror = function () { resolve(file); };
-      reader.readAsDataURL(file);
-    });
-  }
-
-  function bindImageUploader(rootEl, prefix, folder, onUrlChange) {
-    var q = function (s) { return rootEl.querySelector(s); };
-    var urlInp = q("#" + prefix + "Url");
-    var thumb = q("#" + prefix + "Thumb");
-    var st = q("#" + prefix + "Status");
-    var camBtn = q("#" + prefix + "CamBtn");
-    var galBtn = q("#" + prefix + "GalBtn");
-    var camInp = q("#" + prefix + "CamInp");
-    var galInp = q("#" + prefix + "GalInp");
-
-    var syncThumb = function (u) {
-      if (thumb) { thumb.style.opacity = u ? "1" : "0.35"; thumb.src = u || ((window.BRAND && window.BRAND.logo) || "logo.png"); }
-      if (onUrlChange) onUrlChange(u || "");
-    };
-
-    var handleFile = async function (file) {
-      if (!file) return;
-      if (st) st.textContent = "Enviando...";
-      var prepared = await compressImageFile(file);
-      var ext = (prepared.type === "image/jpeg") ? "jpg" : ((file.name.split(".").pop() || "jpg").replace(/[^a-zA-Z0-9]/g, "") || "jpg");
-      var path = (S.user ? S.user.id : "anon") + "/" + folder + "/" + Date.now() + "-" + Math.random().toString(36).slice(2, 7) + "." + ext;
-      var up = await sb.storage.from(MEDIA_BUCKET).upload(path, prepared, { upsert: true });
-      if (up.error) {
-        if (st) st.textContent = "Falha no upload";
-        toast("Erro ao enviar imagem: " + up.error.message);
-        return;
-      }
-      var pub = sb.storage.from(MEDIA_BUCKET).getPublicUrl(path);
-      var publicUrl = pub && pub.data ? pub.data.publicUrl : "";
-      if (urlInp) urlInp.value = publicUrl;
-      if (st) st.textContent = "Link salvo!";
-      syncThumb(publicUrl);
-      toast("Imagem enviada e link gerado!");
-    };
-
-    if (camBtn && camInp) camBtn.onclick = function () { camInp.click(); };
-    if (galBtn && galInp) galBtn.onclick = function () { galInp.click(); };
-    if (camInp) camInp.onchange = function () { if (camInp.files && camInp.files[0]) handleFile(camInp.files[0]); };
-    if (galInp) galInp.onchange = function () { if (galInp.files && galInp.files[0]) handleFile(galInp.files[0]); };
-    if (urlInp) urlInp.oninput = function () { syncThumb(urlInp.value.trim()); };
-  }
-
-  async function uploadPdfFile(file, folder) {
-    if (!file) return "";
-    var path = (S.user ? S.user.id : "anon") + "/" + folder + "/" + Date.now() + "-curriculo.pdf";
-    var up = await sb.storage.from(MEDIA_BUCKET).upload(path, file, { contentType: "application/pdf", upsert: true });
-    if (up.error) {
-      toast("Erro ao enviar PDF: " + up.error.message);
-      return "";
-    }
-    var pub = sb.storage.from(MEDIA_BUCKET).getPublicUrl(path);
-    return pub && pub.data ? pub.data.publicUrl : "";
-  }
-
-  // Insere/atualiza ignorando colunas opcionais caso alguma coluna ainda não exista no banco
-  async function writeBarSafe(mode, payload, barId) {
-    var data = Object.assign({}, payload);
-    var optionalKeys = ["handle", "city", "lat", "lon", "logo_url", "banner_url", "shakers", "tiers", "slogan", "name_font", "crest_border", "logo_pos", "name_pos", "menu_display_mode", "color_bg", "color_surface", "color_accent", "color_ok", "color_text"];
-    for (var attempt = 0; attempt < 8; attempt++) {
-      var res = mode === "insert"
-        ? await sb.from("bars").insert(data).select().single()
-        : await sb.from("bars").update(data).eq("id", barId).select().single();
-      if (!res.error) return res;
-      var msg = String(res.error.message || "");
-      var removed = false;
-      for (var i = 0; i < optionalKeys.length; i++) {
-        var k = optionalKeys[i];
-        if (k in data && msg.includes(k)) {
-          delete data[k];
-          removed = true;
-          break;
-        }
-      }
-      if (!removed) return res;
-    }
-    return await (mode === "insert"
-      ? sb.from("bars").insert({ name: payload.name, kind: payload.kind, owner: payload.owner }).select().single()
-      : sb.from("bars").update({ name: payload.name }).eq("id", barId).select().single());
-  }
-
-  function toast(t) {
-    var d = document.createElement("div");
-    d.className = "toast";
-    d.textContent = t;
-    document.body.appendChild(d);
-    setTimeout(function () { d.remove(); }, 2500);
-  }
-
-  function beep() {
-    try {
-      var c = new (window.AudioContext || window.webkitAudioContext)();
-      var o = c.createOscillator(), g = c.createGain();
-      o.connect(g); g.connect(c.destination);
-      o.frequency.value = 740;
-      g.gain.setValueAtTime(0.2, c.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.45);
-      o.start(); o.stop(c.currentTime + 0.45);
-    } catch (e) {}
-  }
-
-  function menuUrl(barId, tableVal) {
-    var p = location.pathname.replace(/[^/]*$/, "menu.html");
-    var q = "?bar=" + encodeURIComponent(barId);
-    if (tableVal) q += "&mesa=" + encodeURIComponent(tableVal);
-    return location.origin + p + q;
-  }
-
-  async function init() {
-    detectCurrentCoords();
-    var res = await sb.auth.getSession();
-    S.user = res.data && res.data.session ? res.data.session.user : null;
-    if (!S.user) { applyBarTheme(null); loginScreen(); }
-    else { await loadProfile(); await loadBars(); }
-    sb.auth.onAuthStateChange(async function (_ev, session) {
-      var u = session ? session.user : null;
-      if ((u && u.id) !== (S.user && S.user.id)) {
-        S.user = u;
-        if (!S.user) {
-          if (S.sub) sb.removeChannel(S.sub);
-          clearInterval(S.pollId);
-          applyBarTheme(null);
-          loginScreen();
-        } else { await loadProfile(); await loadBars(); }
-      }
-    });
-  }
-
-  function loginScreen() {
-    app.innerHTML =
-      '<div class="w narrow"><div style="text-align:center;margin-bottom:14px">' + brandLogoHtml(null, true) +
-      '</div><p class="mu" style="text-align:center">Entre ou crie sua conta para gerenciar o bar, receitas, currículo e vagas.</p>' +
-      '<div class="panel"><label>E-mail</label><input id="em" type="email" autocomplete="email" placeholder="voce@exemplo.com">' +
-      '<label>Senha</label><input id="pw" type="password" autocomplete="current-password" placeholder="Mínimo 6 caracteres">' +
-      '<div class="row" style="margin-top:16px"><button class="b grow" id="in">Entrar</button><button class="b g grow" id="up">Criar conta</button></div>' +
-      '<p class="err" id="er"></p></div></div>';
-
-    var go = async function (mode) {
-      $("#er").textContent = "";
-      var em = $("#em").value.trim(), pw = $("#pw").value;
-      if (!em || !pw) { $("#er").textContent = "Preencha e-mail e senha."; return; }
-      var r = mode === "in"
-        ? await sb.auth.signInWithPassword({ email: em, password: pw })
-        : await sb.auth.signUp({ email: em, password: pw });
-      if (r.error) { $("#er").textContent = r.error.message; return; }
-      if (mode === "up" && !r.data.session) {
-        $("#er").className = "ok-txt";
-        $("#er").textContent = "Conta criada! Confira seu e-mail para confirmar e entrar.";
-      }
-    };
-    $("#in").onclick = function () { go("in"); };
-    $("#up").onclick = function () { go("up"); };
-  }
-
-  async function loadProfile() {
-    var r = await sb.from("staff_profiles").select("*").eq("user_id", S.user.id).maybeSingle();
-    S.profile = r.data || {
-      user_id: S.user.id,
-      display_name: (S.user.email || "").split("@")[0] || "Profissional",
-      avatar_url: "",
-      resume_pdf_url: "",
-      location: "",
-      skills: [],
-      work_mode: "ambos",
-      experience_years: 0,
-      bio: "",
-      availability: ""
-    };
-  }
-
-  async function loadBars() {
-    var own = await sb.from("bars").select("*").eq("owner", S.user.id);
-    var mem = await sb.from("bar_members").select("role, name, bars(*)").eq("user_id", S.user.id);
-    var map = {};
-    (own.data || []).forEach(function (b) { map[b.id] = { bar: b, role: "owner" }; });
-    (mem.data || []).forEach(function (m) {
-      if (m.bars && !map[m.bars.id]) map[m.bars.id] = { bar: m.bars, role: m.role };
-    });
-    S.bars = Object.keys(map).map(function (id) { return map[id]; });
-
-    if (S.bars.length) {
-      var savedBar = localStorage.getItem("last_bar_" + S.user.id);
-      var pick = S.bars.find(function (x) { return x.bar.id === savedBar; }) || S.bars[0];
-      await openBar(pick.bar, pick.role);
-    } else {
-      applyBarTheme(null);
-      await loadJobsAndRequests();
-      onboardingScreen();
-    }
-  }
-
-  async function loadJobsAndRequests() {
-    var jr = await sb.from("job_posts").select("*, bars(name, handle, city)").eq("is_open", true).order("created_at", { ascending: false }).limit(80);
-    S.jobs = jr.data || [];
-    var ar = await sb.from("job_applications").select("*").eq("applicant_id", S.user.id);
-    S.myApps = ar.data || [];
-    var sr = await sb.from("service_requests").select("*, bars(name, handle)").eq("requester_id", S.user.id).order("created_at", { ascending: false }).limit(30);
-    S.serviceReqs = sr.data || [];
-
-    if (S.bar && isManager()) {
-      var barJobIds = S.jobs.filter(function (j) { return j.bar_id === S.bar.id; }).map(function (j) { return j.id; });
-      if (barJobIds.length) {
-        var ra = await sb.from("job_applications").select("*, job_posts(id, title, role_needed), staff_profiles(*)").in("job_id", barJobIds).order("created_at", { ascending: false });
-        S.receivedApps = ra.data || [];
-      } else {
-        S.receivedApps = [];
-      }
-    } else {
-      S.receivedApps = [];
-    }
-  }
-
-  function onboardingScreen() {
-    app.innerHTML =
-      '<div class="top">' + brandLogoHtml(null, false) + '<button class="lnk" id="out">Sair</button></div>' +
-      '<div class="w narrow"><h1>Começar no Meu Bar</h1><p class="mu">Crie seu bar, envie solicitação por <b>@ + senha</b> ou preencha seu <b>currículo</b> e busque <b>vagas</b>.</p>' +
-      '<div class="panel"><h2>Criar novo bar</h2>' +
-      '<label>Nome do bar</label><input id="bn" placeholder="Ex: Minha casa">' +
-      '<label>@ do bar (único)</label><input id="bh" placeholder="Ex: minha_casa_7228">' +
-      '<label>Localização do bar (digite para ver sugestões da mais próxima)</label>' +
-      '<input id="bc" placeholder="Ex: Asa Norte, Brasília, DF" autocomplete="off">' +
-      '<div class="loc-suggest-box" id="bcSug" style="display:none"></div>' +
-      '<input type="hidden" id="bcLat"><input type="hidden" id="bcLon">' +
-      '<label>Tipo</label><select id="bk"><option value="home">Em casa / Amigos (sem preço)</option><option value="bar">Bar / Restaurante (com preços)</option></select>' +
-      '<label>Seu nome na equipe</label><input id="mn" placeholder="Ex: Davi">' +
-      '<div id="cbLogoBox"></div><div id="cbBannerBox"></div>' +
-      '<button class="b full" id="cr" style="margin-top:14px">Criar bar</button><p class="err" id="er"></p></div>' +
-      '<div class="panel"><h2>Solicitar serviço por @ do bar + senha</h2>' +
-      '<label>@ do bar</label><input id="rqh" placeholder="Ex: @minha_casa_7228">' +
-      '<label>Senha de serviço</label><input id="rqp" placeholder="Senha gerada pelo dono ou gerente">' +
-      '<label>Função</label><select id="rqr"><option value="barman">Barman</option><option value="garcom">Garçom</option><option value="cozinha">Cozinha</option><option value="caixa">Caixa</option></select>' +
-      '<button class="b g full" id="rqs" style="margin-top:12px">Enviar solicitação</button><p class="err" id="rqer"></p><p class="ok-txt" id="rqok"></p></div>' +
-      '<div class="panel"><h2>Currículo & Vagas</h2><div class="row" style="margin-top:8px">' +
-      '<button class="b g grow" id="openProf">Meu Currículo</button><button class="b g grow" id="openJobs">Mural de Vagas (' + S.jobs.length + ')</button></div></div></div>';
-
-    $("#cbLogoBox").innerHTML = imageUploaderHtml("cbLg", "Logo do bar (foto ou galeria)", "");
-    $("#cbBannerBox").innerHTML = imageUploaderHtml("cbBn", "Banner do bar (foto ou galeria)", "");
-    bindImageUploader(app, "cbLg", "logos");
-    bindImageUploader(app, "cbBn", "banners");
-    bindLocationSearchInput(app, "bc", "bcSug", "bcLat", "bcLon");
-
-    $("#out").onclick = function () { sb.auth.signOut(); };
-    $("#bn").oninput = function () { if (!$("#bh").dataset.manual) $("#bh").value = slugHandle($("#bn").value); };
-    $("#bh").oninput = function () { $("#bh").dataset.manual = "1"; $("#bh").value = slugHandle($("#bh").value); };
-
-    $("#cr").onclick = async function () {
-      $("#er").textContent = "";
-      var name = $("#bn").value.trim();
-      var handle = slugHandle($("#bh").value || name);
-      if (name.length < 2) { $("#er").textContent = "Digite o nome do bar."; return; }
-      if (handle.length < 3) { $("#er").textContent = "Escolha um @ válido (mínimo 3 caracteres)."; return; }
-      var latVal = $("#bcLat").value ? Number($("#bcLat").value) : null;
-      var lonVal = $("#bcLon").value ? Number($("#bcLon").value) : null;
-
-      var ins = await writeBarSafe("insert", {
-        name: name,
-        handle: handle,
-        city: $("#bc").value.trim() || null,
-        lat: latVal,
-        lon: lonVal,
-        kind: $("#bk").value,
-        logo_url: ($("#cbLgUrl").value || "").trim() || null,
-        banner_url: ($("#cbBnUrl").value || "").trim() || null,
-        owner: S.user.id,
-        shakers: 2,
-        tiers: [{ name: "Padrão", bonus: 0 }]
-      });
-      if (ins.error) { $("#er").textContent = ins.error.code === "23505" ? "Esse @ já está em uso." : ins.error.message; return; }
-      await sb.from("bar_members").insert({ bar_id: ins.data.id, user_id: S.user.id, role: "owner", name: $("#mn").value.trim() || S.profile.display_name || "Dono" });
-      localStorage.setItem("last_bar_" + S.user.id, ins.data.id);
-      await loadBars();
-    };
-
-    $("#rqs").onclick = async function () {
-      $("#rqer").textContent = ""; $("#rqok").textContent = "";
-      var r = await sb.rpc("request_service_by_handle", { p_handle: $("#rqh").value, p_password: $("#rqp").value, p_role: $("#rqr").value });
-      if (r.error) { $("#rqer").textContent = r.error.message; return; }
-      $("#rqok").textContent = "Solicitação enviada com seu currículo!";
-      await loadJobsAndRequests();
-    };
-
-    $("#openProf").onclick = function () { standaloneModal(false); };
-    $("#openJobs").onclick = function () { standaloneModal(true); };
-  }
-
-  function standaloneModal(jobsFirst) {
-    var o = document.createElement("div");
-    o.className = "ov";
-    o.innerHTML = '<div class="w narrow"><button class="b g" id="x">← Voltar</button><div id="b" style="margin-top:12px"></div></div>';
-    document.body.appendChild(o);
-    o.querySelector("#x").onclick = function () { o.remove(); onboardingScreen(); };
-    if (jobsFirst) renderJobsSection(o.querySelector("#b"));
-    else renderProfileSection(o.querySelector("#b"));
-  }
-
-  async function openBar(bar, role) {
-    S.bar = bar; S.role = role; S.settledIds = new Set();
-    localStorage.setItem("last_bar_" + S.user.id, bar.id);
-    applyBarTheme(bar);
-
-    var r1 = await sb.from("bar_items").select("*").eq("bar_id", bar.id).order("name");
-    var r2 = await sb.from("recipes").select("*").order("name");
-    var r3 = await sb.from("bar_prices").select("recipe_id, price").eq("bar_id", bar.id);
-    var r4 = await sb.from("orders").select("*").eq("bar_id", bar.id).neq("status", "done").order("created_at");
-    var r5 = await sb.from("bar_members").select("*").eq("bar_id", bar.id);
-
-    S.items = r1.data || []; S.recipes = r2.data || [];
-    S.prices = {}; (r3.data || []).forEach(function (x) { S.prices[x.recipe_id] = x.price; });
-    S.orders = r4.data || []; S.members = r5.data || [];
-
-    if (isManager()) {
-      var pw = await sb.from("bar_service_passwords").select("*").eq("bar_id", bar.id).order("created_at", { ascending: false });
-      S.passwords = pw.data || [];
-    } else { S.passwords = []; }
-
-    await loadJobsAndRequests();
-    shell();
-    subscribeRealtime();
-  }
-
-  function subscribeRealtime() {
-    if (S.sub) sb.removeChannel(S.sub);
-    clearInterval(S.pollId);
-    S.sub = sb.channel("bar-" + S.bar.id)
-      .on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: "bar_id=eq." + S.bar.id }, async function (p) {
-        if (p.eventType === "INSERT") beep();
-        await refreshOrders();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "job_posts" }, async function () {
-        await loadJobsAndRequests();
-        if (S.tab === "careers") paint();
-      })
-      .subscribe();
-    S.pollId = setInterval(refreshOrders, 12000);
-  }
-
-  async function refreshOrders() {
-    if (!S.bar) return;
-    var r = await sb.from("orders").select("*").eq("bar_id", S.bar.id).neq("status", "done").order("created_at");
-    S.orders = r.data || [];
-    if (S.tab === "queue") paint();
-    if (S.tab === "cashier") paint();
-    updateBottomNavBadge();
-  }
-
-  function updateBottomNavBadge() {
-    var b = document.querySelector('[data-nav="queue"] .nav-badge');
-    if (b) b.textContent = S.orders.length ? " (" + S.orders.length + ")" : "";
-  }
-
-  function makeDrink(recipe) {
-    var have = new Set(S.items.filter(function (i) { return i.in_stock; }).map(function (i) { return i.name.trim().toLowerCase(); }));
-    var free = new Set(["gelo", "agua", "agua gelada", "água", "água gelada"]);
-    return !(recipe.ingredients || []).some(function (x) {
-      var n = (x.n || "").trim().toLowerCase();
-      return n && !free.has(n) && !have.has(n);
-    });
-  }
-
-  function recipeTags(r) {
-    if (Array.isArray(r.tags) && r.tags.length) return r.tags;
-    var t = [];
-    if (r.category === "Refrescantes") t.push("Refrescante", "Longo");
-    if (r.category === "Fortes") t.push("Forte", "Curto");
-    if (r.category === "Cítricos") t.push("Ácido");
-    if (r.category === "Tropicais") t.push("Tropical");
-    if (r.category === "Doces & Frutados") t.push("Doce", "Frutado");
-    if (r.category === "Aperitivos") t.push("Aperitivo");
-    return t;
-  }
-
-  function matchRecipeTags(r) {
-    if (!S.rTags.size) return true;
-    var t = new Set(recipeTags(r));
-    var ok = true;
-    S.rTags.forEach(function (x) { if (!t.has(x)) ok = false; });
-    return ok;
-  }
-
-  function tile(r) {
-    var idx = Math.max(0, CATS.indexOf(r.category));
-    var img = r.image_url ? ' style="background-image:url(\'' + esc(r.image_url) + "')\"" : "";
-    var emoji = r.image_url ? "" : (EMO[idx] || "🍸");
-    return '<div class="im c' + idx + '"' + img + ">" + emoji + "</div>";
-  }
-
-  function estimateRecipeCost(recipe) {
-    if (Number(recipe.base_cost) > 0) return Number(recipe.base_cost);
-    var costMap = {};
-    S.items.forEach(function (it) { costMap[(it.name || "").trim().toLowerCase()] = Number(it.unit_cost) || 0; });
-    var sum = 0;
-    (recipe.ingredients || []).forEach(function (ing) {
-      var k = (ing.n || "").trim().toLowerCase();
-      if (costMap[k]) sum += costMap[k];
-    });
-    return sum > 0 ? sum : (Number(S.bar && S.bar.base_cost) > 0 ? Number(S.bar.base_cost) : 6);
-  }
-
-  function suggestedPrice(recipe) {
-    return Math.ceil((estimateRecipeCost(recipe) * Math.max(1.2, Number(S.pMarkup) || 2.8)) * 2) / 2;
-  }
-
-  function openSwitchBarModal() {
-    var o = document.createElement("div");
-    o.className = "ov";
-    o.innerHTML =
-      '<div class="w narrow"><button class="b g sm" id="closeSw">← Voltar</button>' +
-      '<h1 style="margin-top:14px">Escolher bar</h1>' +
-      '<p class="mu">Selecione qual bar você está gerenciando agora ou crie um novo.</p>' +
-      '<div class="list" style="margin-top:14px">' +
-      S.bars.map(function (x) {
-        var active = S.bar && S.bar.id === x.bar.id;
-        return '<div style="align-items:flex-start"><div style="flex:1"><b>' + esc(x.bar.name) + '</b> <span class="badge-warn">' + esc(ROLE_LABELS[x.role] || x.role) + "</span>" +
-          (x.bar.city ? '<br><span class="tag">📍 ' + esc(x.bar.city) + ' · <a href="' + esc(externalMapUrl(x.bar)) + '" target="_blank" rel="noopener" style="color:var(--ac)">Abrir no mapa</a></span>' : "") +
-          '</div>' + (active ? '<span class="chip st1">Ativo</span>' : '<button class="b sm" data-pickbar="' + x.bar.id + '" data-pickrole="' + x.role + '">Gerenciar</button>') + "</div>";
-      }).join("") +
-      '</div><button class="b g full" id="newBarFromSw" style="margin-top:14px">+ Criar ou entrar em outro bar</button></div>';
-    document.body.appendChild(o);
-    o.querySelector("#closeSw").onclick = function () { o.remove(); };
-    o.querySelectorAll("[data-pickbar]").forEach(function (btn) {
-      btn.onclick = async function () {
-        var bid = btn.getAttribute("data-pickbar");
-        var r = btn.getAttribute("data-pickrole");
-        var found = S.bars.find(function (x) { return x.bar.id === bid; });
-        o.remove();
-        if (found) await openBar(found.bar, r);
-      };
-    });
-    o.querySelector("#newBarFromSw").onclick = function () {
-      o.remove();
-      onboardingScreen();
-    };
-  }
-
-  function shell() {
-    app.innerHTML =
-      '<div class="top">' + brandLogoHtml(S.bar, false) +
-      '<div class="row"><button class="bar-switcher-pill" id="topSwitchBar">🏠 Trocar bar</button><button class="lnk" id="out">Sair</button></div></div>' +
-      '<div class="w" id="view"></div>' +
-      '<nav class="bnav">' +
-      '<button class="bnav-btn ' + (S.tab === "recipes" ? "on" : "") + '" data-nav="recipes"><span class="ico">🍸</span><span>Receitas</span></button>' +
-      '<button class="bnav-btn ' + (S.tab === "stock" ? "on" : "") + '" data-nav="stock"><span class="ico">🍾</span><span>Estoque</span></button>' +
-      '<button class="bnav-btn ' + (S.tab === "queue" ? "on" : "") + '" data-nav="queue"><span class="ico">🔔</span><span>Fila<span class="nav-badge">' + (S.orders.length ? " (" + S.orders.length + ")" : "") + '</span></span></button>' +
-      '<button class="bnav-btn ' + (S.tab === "more" ? "on" : "") + '" data-nav="more"><span class="ico">•••</span><span>Mais</span></button>' +
-      "</nav>";
-
-    $("#topSwitchBar").onclick = openSwitchBarModal;
-    $("#out").onclick = function () { sb.auth.signOut(); };
-    document.querySelectorAll("[data-nav]").forEach(function (btn) {
-      btn.onclick = function () {
-        S.tab = btn.getAttribute("data-nav");
-        document.querySelectorAll("[data-nav]").forEach(function (x) { x.classList.toggle("on", x === btn); });
-        paint();
-      };
-    });
-    paint();
-  }
-
-  function paint() {
-    var v = $("#view");
-    if (!v) return;
-    if (S.tab === "recipes") recipesView(v);
-    else if (S.tab === "stock") stockView(v);
-    else if (S.tab === "queue") queueView(v);
-    else if (S.tab === "cashier") cashierView(v);
-    else if (S.tab === "careers") careersView(v);
-    else if (S.tab === "studio") storeStudioView(v);
-    else moreView(v);
-  }
-
-  function recipesView(v) {
-    var canList = S.recipes.filter(makeDrink);
-    var missingList = S.recipes.filter(function (r) { return !makeDrink(r); });
-    var basePool = S.rFilter === "can" ? canList : (S.rFilter === "missing" ? missingList : S.recipes);
-    var q = S.rQuery.trim().toLowerCase();
-    var displayMode = S.bar.menu_display_mode || "grid-classic";
-
-    var filtered = basePool.filter(function (r) {
-      if (S.rCat !== "Todas" && r.category !== S.rCat) return false;
-      if (!matchRecipeTags(r)) return false;
-      if (q) {
-        var inName = (r.name || "").toLowerCase().includes(q);
-        var inIng = (r.ingredients || []).some(function (i) { return (i.n || "").toLowerCase().includes(q); });
-        if (!inName && !inIng) return false;
-      }
-      return true;
-    });
-
-    v.innerHTML =
-      '<div class="row sp" style="align-items:flex-start">' +
-      '<div><h1>Receitas</h1><p class="mu">' + esc(S.bar.name) + " · você faz " + canList.length + "</p></div>" +
-      '<div class="row"><button class="b sm g" id="pickMood">✨ O que tomar?</button>' +
-      '<select id="catSelect" style="width:auto;padding:8px 12px;font-size:.85rem">' +
-      ["Todas"].concat(CATS).map(function (c) {
-        return '<option value="' + esc(c) + '" ' + (S.rCat === c ? "selected" : "") + '>' + (c === "Todas" ? "Categorias" : esc(c)) + "</option>";
-      }).join("") + "</select></div></div>" +
-      '<input id="searchDrink" value="' + esc(S.rQuery) + '" placeholder="Buscar drink" style="margin-top:14px">' +
-      '<div class="chips" style="margin-top:10px">' +
-      '<button class="chip ' + (S.rFilter === "can" ? "on" : "") + '" data-rf="can">Faço agora</button>' +
-      '<button class="chip ' + (S.rFilter === "missing" ? "on" : "") + '" data-rf="missing">Falta ' + missingList.length + "</button>" +
-      '<button class="chip ' + (S.rFilter === "all" ? "on" : "") + '" data-rf="all">Todas</button></div>' +
-      (S.showTags
-        ? '<div class="chips" style="flex-wrap:wrap;overflow:visible;margin-top:6px">' +
-          ALL_TAGS.map(function (t) {
-            return '<span class="chip ' + (S.rTags.has(t) ? "on" : "") + '" data-rtag="' + esc(t) + '">' + esc(t) + "</span>";
-          }).join("") +
-          (S.rTags.size ? '<span class="chip" id="clrRTags" style="border-style:dashed">Limpar</span>' : "") + "</div>"
-        : "") +
-      '<div class="menu-items ' + esc(displayMode) + '" style="margin-top:14px">' +
-      (filtered.length
-        ? filtered.map(function (r) {
-            var tg = recipeTags(r).slice(0, 2);
-            var pr = hasPricing() && S.prices[r.id] != null ? '<span class="tag pr">' + money(S.prices[r.id]) + "</span>" : "";
-            return '<button class="card" data-rec="' + r.id + '">' + tile(r) +
-              '<div class="t"><div><div>' + esc(r.name) + "</div>" +
-              (tg.length ? '<span class="pill-tag">' + esc(tg.join(" · ")) + "</span>" : "") +
-              "</div>" + pr + "</div></button>";
-          }).join("")
-        : '<p class="mu">Nenhuma receita encontrada com esse filtro.</p>') + "</div>";
-
-    $("#pickMood").onclick = function () { S.showTags = !S.showTags; recipesView(v); };
-    $("#catSelect").onchange = function (e) { S.rCat = e.target.value; recipesView(v); };
-    $("#searchDrink").oninput = function (e) { S.rQuery = e.target.value; recipesView(v); };
-    v.querySelectorAll("[data-rf]").forEach(function (b) { b.onclick = function () { S.rFilter = b.getAttribute("data-rf"); recipesView(v); }; });
-    v.querySelectorAll("[data-rtag]").forEach(function (c) {
-      c.onclick = function () {
-        var t = c.getAttribute("data-rtag");
-        if (S.rTags.has(t)) S.rTags.delete(t); else S.rTags.add(t);
-        recipesView(v);
-      };
-    });
-    if ($("#clrRTags")) $("#clrRTags").onclick = function () { S.rTags.clear(); recipesView(v); };
-    v.querySelectorAll("[data-rec]").forEach(function (card) {
-      card.onclick = function () {
-        var r = S.recipes.find(function (x) { return x.id === card.getAttribute("data-rec"); });
-        if (r) openMakeDrinkModal(r);
-      };
-    });
-  }
-
-  function openMakeDrinkModal(r) {
-    var canMake = makeDrink(r);
-    var o = document.createElement("div");
-    o.className = "ov";
-    o.innerHTML =
-      '<div class="hero c' + Math.max(0, CATS.indexOf(r.category)) + '"' +
-      (r.image_url ? ' style="background-image:url(\'' + esc(r.image_url) + "')\"" : "") +
-      ">" + (r.image_url ? "" : (EMO[CATS.indexOf(r.category)] || "🍸")) +
-      '</div><div class="w"><button class="b g sm" id="closeRec">← Voltar</button>' +
-      '<h1 style="margin-top:14px">' + esc(r.name) + "</h1>" +
-      '<p class="mu">' + esc(r.category || "Drink") + " · " + (canMake ? '<span style="color:var(--ok)">Pronto para fazer agora</span>' : '<span class="warn-txt">Falta ingrediente no estoque</span>') + "</p>" +
-      (r.description ? '<p class="desc">' + esc(r.description) + "</p>" : "") +
-      '<h2>Ingredientes</h2><div class="chips" style="flex-wrap:wrap;overflow:visible">' +
-      (r.ingredients || []).map(function (i) {
-        return '<span class="chip st1">' + esc(i.n) + (i.q ? " · " + esc(i.q) : "") + "</span>";
-      }).join("") + "</div>" +
-      (r.instructions ? '<h2>Modo de preparo</h2><p class="mu" style="line-height:1.6">' + esc(r.instructions) + "</p>" : "") +
-      (r.story ? '<h2>História</h2><p class="mu story">' + esc(r.story) + "</p>" : "") +
-      '<div class="panel" style="margin-top:18px"><label style="margin-top:0">Para quem é este drink? (opcional)</label>' +
-      '<input id="mkFor" placeholder="Ex: Para mim / Mesa 2">' +
-      '<button class="b ok full" id="makeNowBtn" style="margin-top:12px">🍸 Fazer este drink agora</button></div></div>';
-
-    document.body.appendChild(o);
-    o.querySelector("#closeRec").onclick = function () { o.remove(); };
-    o.querySelector("#makeNowBtn").onclick = function () {
-      var who = (o.querySelector("#mkFor").value || "").trim() || "Preparo direto";
-      o.remove();
-      toast('Drink "' + r.name + '" preparado (' + who + ")!");
-    };
-  }
-
-  function stockView(v) {
-    v.innerHTML =
-      '<div class="row sp"><h1>Estoque</h1>' + (canEditMenu() && hasPricing() ? '<button class="b sm" id="goPrices">Precificação</button>' : "") + '</div>' +
-      '<p class="mu">Toque no item para alternar disponível / em falta.</p>' +
-      '<div class="panel"><label>Novo ingrediente ou item</label><div class="row">' +
-      '<input class="grow" id="inName" placeholder="Ex: Gin, Limão, Hortelã">' +
-      '<input id="inCost" type="number" step="0.1" min="0" placeholder="Custo (R$)" style="width:120px">' +
-      '<button class="b sm" id="inAdd">Adicionar</button></div><p class="err" id="inEr"></p></div>' +
-      '<div class="list" style="margin-top:14px">' + S.items.map(function (i) {
-        return '<div><div><b>' + esc(i.name) + '</b><br><span class="tag">Custo base: ' + money(i.unit_cost) + "</span></div>" +
-          '<button class="chip ' + (i.in_stock ? "st1" : "st0") + '" data-tog="' + i.id + '">' + (i.in_stock ? "Disponível" : "Em falta") + "</button></div>";
-      }).join("") + "</div>";
-
-    if ($("#goPrices")) $("#goPrices").onclick = function () { pricesView(v); };
-    $("#inAdd").onclick = async function () {
-      $("#inEr").textContent = "";
-      var nm = $("#inName").value.trim();
-      if (!nm) { $("#inEr").textContent = "Digite o nome do item."; return; }
-      var r = await sb.from("bar_items").insert({ bar_id: S.bar.id, name: nm, in_stock: true, unit_cost: Math.max(0, Number($("#inCost").value) || 0) }).select().single();
-      if (r.error) { $("#inEr").textContent = r.error.message; return; }
-      S.items.push(r.data); S.items.sort(function (a, b) { return a.name.localeCompare(b.name); }); stockView(v);
-    };
-    v.querySelectorAll("[data-tog]").forEach(function (b) {
-      b.onclick = async function () {
-        var it = S.items.find(function (x) { return x.id === b.getAttribute("data-tog"); });
-        if (!it) return;
-        var r = await sb.from("bar_items").update({ in_stock: !it.in_stock }).eq("id", it.id).select().single();
-        if (!r.error && r.data) { it.in_stock = r.data.in_stock; stockView(v); }
-      };
-    });
-  }
-
-  function queueView(v) {
-    var open = S.bar.accepting_orders !== false;
-    var active = S.orders.filter(function (o) { return o.status !== "done"; });
-    v.innerHTML =
-      '<div class="row sp"><h1>Fila de Pedidos</h1><button class="b sm ' + (open ? "g" : "ok") + '" id="pauseBtn">' + (open ? "Pausar pedidos" : "Retomar pedidos") + "</button></div>" +
-      (open ? "" : '<p class="warn-txt">Pedidos pausados no cardápio agora.</p>') +
-      '<div style="margin-top:12px">' +
-      (active.length ? active.map(function (o) {
-        var isReady = o.status === "ready";
-        return '<div class="ord ' + (isReady ? "ready" : "") + '"><div class="row sp"><h3>' + esc(o.customer_name || "Cliente") + '</h3><span class="tag">' + (isReady ? "PRONTO" : "PREPARANDO") + "</span></div>" +
-          '<div class="meta">' + new Date(o.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) + "</div>" +
-          '<div class="items"><b>' + esc(o.qty) + "× " + esc(o.recipe_name || "Drink") + "</b>" + (o.note ? '<br><span class="mu">Obs: ' + esc(o.note) + "</span>" : "") + "</div>" +
-          '<div class="acts">' + (!isReady ? '<button class="b sm ok" data-act="ready" data-id="' + o.id + '">Marcar pronto</button>' : "") +
-          '<button class="b sm g" data-act="done" data-id="' + o.id + '">Entregue</button></div></div>';
-      }).join("") : '<p class="mu">Nenhum pedido na fila agora. Você pode fazer drinks direto na aba Receitas.</p>') + "</div>";
-
-    $("#pauseBtn").onclick = async function () {
-      var r = await sb.from("bars").update({ accepting_orders: !open }).eq("id", S.bar.id).select().single();
-      if (!r.error && r.data) { S.bar = r.data; queueView(v); }
-    };
-    v.querySelectorAll("[data-act]").forEach(function (btn) {
-      btn.onclick = async function () {
-        await sb.from("orders").update({ status: btn.getAttribute("data-act") }).eq("id", btn.getAttribute("data-id"));
-        await refreshOrders();
-        queueView(v);
-      };
-    });
-  }
-
-  function cashierView(v) {
-    var openOrders = S.orders.filter(function (o) { return !S.settledIds.has(o.id); });
-    var grouped = {};
-    var grandTotal = 0;
-
-    openOrders.forEach(function (o) {
-      var key = (o.customer_name || "Cliente").trim();
-      var unit = (o.unit_price != null ? Number(o.unit_price) : (o.recipe_id && S.prices[o.recipe_id] != null ? Number(S.prices[o.recipe_id]) : 0));
-      var line = (Number(o.qty) || 1) * unit;
-      grandTotal += line;
-      if (!grouped[key]) grouped[key] = { name: key, total: 0, ids: [], lines: [] };
-      grouped[key].total += line;
-      grouped[key].ids.push(o.id);
-      grouped[key].lines.push((o.qty || 1) + "× " + (o.recipe_name || "Drink") + (unit ? " (" + money(line) + ")" : ""));
-    });
-
-    var customers = Object.keys(grouped).map(function (k) { return grouped[k]; });
-
-    v.innerHTML =
-      '<button type="button" class="b g sm" id="backMoreCash">← Voltar para Mais</button>' +
-      '<h1 style="margin-top:12px">Caixa</h1>' +
-      '<p class="mu">' + esc(S.bar.name) + (hasPricing() ? " · Comandas em aberto" : " · Modo livre (sem cobrança)") + "</p>" +
-      '<div class="pay"><div class="row sp"><span>Total em aberto</span><span class="tt">' + money(grandTotal) + "</span></div></div>" +
-      '<div class="list" style="margin-top:14px">' +
-      (customers.length
-        ? customers.map(function (c, idx) {
-            return '<div style="align-items:flex-start"><div style="flex:1"><b>' + esc(c.name) + "</b>" +
-              (hasPricing() ? ' · <span class="pr">' + money(c.total) + "</span>" : "") +
-              '<br><span class="tag">' + esc(c.lines.join(", ")) + "</span></div>" +
-              '<button type="button" class="b sm ok" data-payidx="' + idx + '">Receber / Fechar</button></div>';
-          }).join("")
-        : '<p class="mu">Nenhuma comanda pendente no caixa agora.</p>') + "</div>";
-
-    $("#backMoreCash").onclick = function () { S.tab = "more"; paint(); };
-    v.querySelectorAll("[data-payidx]").forEach(function (btn) {
-      btn.onclick = async function () {
-        var c = customers[Number(btn.getAttribute("data-payidx"))];
-        if (!c) return;
-        for (var i = 0; i < c.ids.length; i++) {
-          S.settledIds.add(c.ids[i]);
-          await sb.from("orders").update({ status: "done" }).eq("id", c.ids[i]);
-        }
-        toast("Comanda de " + c.name + " fechada!");
-        await refreshOrders();
-        cashierView(v);
-      };
-    });
-  }
-
-  function pricesView(v) {
-    var unpricedAvailable = S.recipes.filter(function (r) { return makeDrink(r) && S.prices[r.id] == null; });
-    var filtered = S.recipes.filter(function (r) {
-      if (S.pCat !== "Todas" && r.category !== S.pCat) return false;
-      if (S.pOnlyNow && !makeDrink(r)) return false;
-      if (S.pFilter === "missing") return S.prices[r.id] == null;
-      if (S.pFilter === "priced") return S.prices[r.id] != null;
-      return true;
-    });
-
-    v.innerHTML =
-      '<button type="button" class="b g sm" id="bkStock">← Voltar ao Estoque</button><h1 style="margin-top:12px">Precificação do Bar</h1>' +
-      (unpricedAvailable.length
-        ? '<div class="alert-box"><b>⚠️ ' + unpricedAvailable.length + ' drink(s) disponível(is) sem preço!</b><p class="mu" style="margin-top:4px">Sem preço, não aparece para o cliente: ' +
-          esc(unpricedAvailable.slice(0, 6).map(function (d) { return d.name; }).join(", ")) + "</p></div>"
-        : '<p class="ok-txt">✓ Todos os drinks disponíveis já possuem preço.</p>') +
-      '<div class="panel"><div class="row"><div class="grow"><label>Multiplicador sobre custo base</label><input id="mkInput" type="number" step="0.1" min="1.1" value="' + esc(S.pMarkup) + '"></div>' +
-      '<div class="grow"><label>Custo base padrão (R$)</label><input id="bcInput" type="number" step="0.5" min="0" value="' + esc(S.bar.base_cost || 0) + '"></div>' +
-      '<div style="align-self:flex-end"><button type="button" class="b sm g" id="saveBase">Salvar base</button></div></div>' +
-      '<div class="row" style="margin-top:12px"><button type="button" class="b sm" id="applyMissing">Sugerir para sem preço</button>' +
-      '<button type="button" class="b sm g" id="togNow">' + (S.pOnlyNow ? "Mostrando: Só os que faço" : "Filtrar: Só os que faço") + "</button></div></div>" +
-      '<div class="chips">' + ["all", "missing", "priced"].map(function (f) {
-        return '<span class="chip ' + (S.pFilter === f ? "on" : "") + '" data-pf="' + f + '">' + (f === "all" ? "Todos" : f === "missing" ? "Sem preço" : "Com preço") + "</span>";
-      }).join("") + '</div><div class="chips">' + ["Todas"].concat(CATS).map(function (c) {
-        return '<span class="chip ' + (S.pCat === c ? "on" : "") + '" data-pc="' + esc(c) + '">' + esc(c) + "</span>";
-      }).join("") + '</div><div class="list" style="margin-top:12px">' +
-      filtered.map(function (r) {
-        var cur = S.prices[r.id], cost = estimateRecipeCost(r), sug = suggestedPrice(r);
-        return '<div><div style="flex:1;min-width:190px"><b>' + esc(r.name) + "</b>" + (cur == null ? '<span class="badge-warn">Sem preço</span>' : "") +
-          '<br><span class="tag">Custo base: ' + money(cost) + " · Sugerido: <b>" + money(sug) + "</b></span></div>" +
-          '<div class="row"><input type="number" step="0.5" min="0" data-pr="' + r.id + '" value="' + (cur != null ? esc(cur) : "") + '" placeholder="R$" style="width:88px">' +
-          '<button type="button" class="b sm g" data-sug="' + r.id + '" data-val="' + sug + '">Usar ' + money(sug) + "</button></div></div>";
-      }).join("") + '</div><button type="button" class="b full" id="savePrices" style="margin-top:14px">Salvar preços</button><p class="ok-txt" id="prMsg"></p>';
-
-    $("#bkStock").onclick = function () { stockView(v); };
-    $("#mkInput").onchange = function () { S.pMarkup = Math.max(1.1, Number($("#mkInput").value) || 2.8); pricesView(v); };
-    $("#saveBase").onclick = async function () {
-      S.pMarkup = Math.max(1.1, Number($("#mkInput").value) || 2.8);
-      var r = await sb.from("bars").update({ base_cost: Math.max(0, Number($("#bcInput").value) || 0) }).eq("id", S.bar.id).select().single();
-      if (!r.error && r.data) { S.bar = r.data; toast("Base salva!"); pricesView(v); }
-    };
-    $("#togNow").onclick = function () { S.pOnlyNow = !S.pOnlyNow; pricesView(v); };
-    v.querySelectorAll("[data-pf]").forEach(function (el) { el.onclick = function () { S.pFilter = el.getAttribute("data-pf"); pricesView(v); }; });
-    v.querySelectorAll("[data-pc]").forEach(function (el) { el.onclick = function () { S.pCat = el.getAttribute("data-pc"); pricesView(v); }; });
-    v.querySelectorAll("[data-sug]").forEach(function (btn) {
-      btn.onclick = function () {
-        var inp = v.querySelector('[data-pr="' + btn.getAttribute("data-sug") + '"]');
-        if (inp) inp.value = btn.getAttribute("data-val");
-      };
-    });
-    $("#applyMissing").onclick = function () {
-      S.recipes.forEach(function (r) {
-        if (S.prices[r.id] == null) {
-          var inp = v.querySelector('[data-pr="' + r.id + '"]');
-          if (inp) inp.value = suggestedPrice(r);
-        }
-      });
-      toast("Preços sugeridos preenchidos!");
-    };
-    $("#savePrices").onclick = async function () {
-      var rows = [];
-      v.querySelectorAll("[data-pr]").forEach(function (inp) {
-        var rid = inp.getAttribute("data-pr"), raw = inp.value.trim();
-        if (raw !== "") { var num = Math.max(0, Number(raw)); S.prices[rid] = num; rows.push({ bar_id: S.bar.id, recipe_id: rid, price: num }); }
-        else delete S.prices[rid];
-      });
-      if (rows.length) {
-        var r = await sb.from("bar_prices").upsert(rows, { onConflict: "bar_id,recipe_id" });
-        if (r.error) { toast("Erro: " + r.error.message); return; }
-      }
-      $("#prMsg").textContent = "Preços salvos!";
-      toast("Preços atualizados!");
-    };
-  }
-
-  function careersView(v) {
-    var mgr = isManager();
-    v.innerHTML =
-      '<button type="button" class="b g sm" id="backMoreTab">← Voltar para Mais</button>' +
-      '<h1 style="margin-top:12px">' + (mgr ? "Criar Vagas & Currículos Recebidos" : "Vagas Disponíveis, Currículo & Loja") + "</h1>" +
-      '<div class="chips">' +
-      (mgr
-        ? '<span class="chip on" id="tabCreateJob">Criar Vagas</span><span class="chip" id="tabApps">Currículos por Vaga (' + S.receivedApps.length + ")</span>"
-        : '<span class="chip on" id="tabJobs">Vagas Disponíveis</span><span class="chip" id="tabProfile">Meu Currículo</span><span class="chip" id="tabReq">Solicitar à Loja</span>') +
-      '</div><div id="careerBox"></div>';
-
-    $("#backMoreTab").onclick = function () { S.tab = "more"; paint(); };
-    var box = $("#careerBox");
-    var setChip = function (id) {
-      box.parentElement.querySelectorAll(".chips .chip").forEach(function (el) { el.classList.toggle("on", el.id === id); });
-    };
-
-    if (mgr) {
-      $("#tabCreateJob").onclick = function () { setChip("tabCreateJob"); renderCreateJobSection(box, S.bar); };
-      $("#tabApps").onclick = function () { setChip("tabApps"); renderReceivedAppsByJobSection(box); };
-      renderCreateJobSection(box, S.bar);
-    } else {
-      $("#tabJobs").onclick = function () { setChip("tabJobs"); renderJobsSection(box); };
-      $("#tabProfile").onclick = function () { setChip("tabProfile"); renderProfileSection(box); };
-      $("#tabReq").onclick = function () { setChip("tabReq"); renderHandleServiceSection(box); };
-      renderJobsSection(box);
-    }
-  }
-
-  function renderCreateJobSection(box, activeBar) {
-    box.innerHTML =
-      '<div class="panel"><h2>Criar nova vaga (' + esc(activeBar.name) + ')</h2>' +
-      '<label>Título da vaga</label><input id="jbTitle" placeholder="Ex: Barman ou Garçom para fim de semana">' +
-      '<div class="row"><div class="grow"><label>Função</label><select id="jbRole">' + JOB_ROLES.map(function (r) {
-        return '<option value="' + r + '">' + esc(ROLE_LABELS[r] || r) + "</option>";
-      }).join("") + '</select></div><div class="grow"><label>Tipo</label><select id="jbType"><option value="freelance">Freelance</option><option value="contrato">Contrato</option></select></div></div>' +
-      '<label>Localidade (mais próximos primeiro)</label>' +
-      '<input id="jbLoc" value="' + esc(activeBar.city || "") + '" placeholder="Digite cidade/bairro" autocomplete="off">' +
-      '<div class="loc-suggest-box" id="jbLocSug" style="display:none"></div>' +
-      '<label>Pagamento / Detalhes</label><input id="jbPay" placeholder="Ex: Diária ou fixo">' +
-      '<label>Descrição</label><textarea id="jbDesc"></textarea>' +
-      '<button type="button" class="b sm" id="jbPub" style="margin-top:10px">Publicar vaga</button><p class="ok-txt" id="jbMsg"></p></div>';
-
-    bindLocationSearchInput(box, "jbLoc", "jbLocSug");
-    box.querySelector("#jbPub").onclick = async function () {
-      var title = box.querySelector("#jbTitle").value.trim(), loc = box.querySelector("#jbLoc").value.trim();
-      if (!title || !loc) { toast("Informe título e localidade."); return; }
-      var r = await sb.from("job_posts").insert({
-        bar_id: activeBar.id, created_by: S.user.id, title: title, role_needed: box.querySelector("#jbRole").value,
-        contract_type: box.querySelector("#jbType").value, location: loc, pay_info: box.querySelector("#jbPay").value.trim() || null,
-        description: box.querySelector("#jbDesc").value.trim() || null, is_open: true
-      }).select().single();
-      if (r.error) { toast("Erro: " + r.error.message); return; }
-      box.querySelector("#jbMsg").textContent = "Vaga publicada!";
-      await loadJobsAndRequests();
-      toast("Vaga publicada!");
-    };
-  }
-
-  function renderReceivedAppsByJobSection(box) {
-    var byJob = {};
-    S.receivedApps.forEach(function (a) {
-      var jid = a.job_id || "geral";
-      var jTitle = (a.job_posts && a.job_posts.title) ? a.job_posts.title : "Vaga";
-      if (!byJob[jid]) byJob[jid] = { title: jTitle, items: [] };
-      byJob[jid].items.push(a);
-    });
-    var groups = Object.keys(byJob).map(function (k) { return byJob[k]; });
-
-    box.innerHTML =
-      '<div class="panel"><h2>Currículos recebidos por vaga (' + S.receivedApps.length + ')</h2>' +
-      (groups.length
-        ? groups.map(function (g) {
-            return '<div class="panel" style="background:var(--s2);margin-top:12px"><h3>Vaga: ' + esc(g.title) + " (" + g.items.length + ")</h3>" +
-              '<div class="list" style="margin-top:10px">' + g.items.map(function (a) {
-                var sp = a.staff_profiles || {};
-                return '<div style="align-items:flex-start"><div class="row" style="align-items:flex-start;flex:1">' +
-                  (sp.avatar_url ? '<img class="img-thumb" src="' + esc(sp.avatar_url) + '" alt="Rosto">' : "") +
-                  '<div style="flex:1"><b>' + esc(sp.display_name || "Candidato") + "</b>" +
-                  (sp.location ? '<br><span class="tag">📍 ' + esc(sp.location) + (sp.work_mode ? " · " + esc(sp.work_mode) : "") + (sp.experience_years ? " · " + esc(sp.experience_years) + "a exp." : "") + "</span>" : "") +
-                  (Array.isArray(sp.skills) && sp.skills.length ? '<br><span class="tag">Funções: ' + esc(sp.skills.join(", ")) + "</span>" : "") +
-                  (sp.resume_pdf_url ? '<br><a href="' + esc(sp.resume_pdf_url) + '" target="_blank" rel="noopener" style="color:var(--ac);font-size:.82rem">📄 Ver currículo em PDF</a>' : "") +
-                  (sp.bio ? '<p class="mu" style="margin-top:6px">' + esc(sp.bio) + "</p>" : "") +
-                  "</div></div></div>";
-              }).join("") + "</div></div>";
-          }).join("")
-        : '<p class="mu" style="margin-top:8px">Nenhum currículo recebido ainda.</p>') + "</div>";
-  }
-
-  function renderProfileSection(box) {
-    var p = S.profile || {}, selected = new Set(p.skills || []);
-    box.innerHTML =
-      '<div class="panel"><h2>Meu Currículo Profissional</h2>' +
-      '<label>Nome profissional</label><input id="pfName" value="' + esc(p.display_name || "") + '">' +
-      '<div id="pfAvatarBox"></div>' +
-      '<label>Anexar currículo em PDF (junto ao digital)</label>' +
-      '<input type="file" id="pfPdfInp" accept="application/pdf">' +
-      '<input id="pfPdfUrl" value="' + esc(p.resume_pdf_url || "") + '" placeholder="Link do PDF (preenchido ao anexar)" style="margin-top:6px">' +
-      '<label>Localidade (digite para sugestões da mais próxima)</label>' +
-      '<input id="pfLoc" value="' + esc(p.location || "") + '" placeholder="Ex: Asa Sul, Brasília, DF" autocomplete="off">' +
-      '<div class="loc-suggest-box" id="pfLocSug" style="display:none"></div>' +
-      '<label>Vínculo</label><select id="pfMode">' + ["ambos", "contrato", "freelance"].map(function (m) {
-        return '<option value="' + m + '" ' + (p.work_mode === m ? "selected" : "") + '>' + m.charAt(0).toUpperCase() + m.slice(1) + "</option>";
-      }).join("") + '</select>' +
-      '<label>Anos de experiência</label><input id="pfExp" type="number" min="0" max="50" value="' + esc(p.experience_years || 0) + '">' +
-      '<label>Disponibilidade</label><input id="pfAvail" value="' + esc(p.availability || "") + '" placeholder="Ex: Noites, fins de semana, eventos">' +
-      '<label>Qualidades / Funções</label><div class="chips" style="flex-wrap:wrap;overflow:visible">' + SKILL_OPTIONS.map(function (sk) {
-        return '<span class="chip ' + (selected.has(sk) ? "on" : "") + '" data-sk="' + esc(sk) + '">' + esc(sk) + "</span>";
-      }).join("") + '</div>' +
-      '<label>Resumo profissional</label><textarea id="pfBio">' + esc(p.bio || "") + "</textarea>" +
-      '<button type="button" class="b full" id="pfSave" style="margin-top:14px">Salvar currículo</button><p class="err" id="pfErr"></p><p class="ok-txt" id="pfMsg"></p></div>';
-
-    box.querySelector("#pfAvatarBox").innerHTML = imageUploaderHtml("pfAv", "Foto de rosto (obrigatória — câmera ou galeria)", p.avatar_url || "");
-    bindImageUploader(box, "pfAv", "avatars");
-    bindLocationSearchInput(box, "pfLoc", "pfLocSug");
-
-    var pdfInp = box.querySelector("#pfPdfInp");
-    if (pdfInp) {
-      pdfInp.onchange = async function () {
-        if (!pdfInp.files || !pdfInp.files[0]) return;
-        toast("Enviando PDF...");
-        var u = await uploadPdfFile(pdfInp.files[0], "resumes");
-        if (u) { box.querySelector("#pfPdfUrl").value = u; toast("PDF anexado!"); }
-      };
-    }
-
-    box.querySelectorAll("[data-sk]").forEach(function (ch) {
-      ch.onclick = function () {
-        var s = ch.getAttribute("data-sk");
-        if (selected.has(s)) selected.delete(s); else selected.add(s);
-        ch.classList.toggle("on");
-      };
-    });
-
-    box.querySelector("#pfSave").onclick = async function () {
-      box.querySelector("#pfErr").textContent = "";
-      var avatarVal = (box.querySelector("#pfAvUrl").value || "").trim();
-      if (!avatarVal) {
-        box.querySelector("#pfErr").textContent = "A foto de rosto é obrigatória no currículo.";
-        toast("Coloque uma foto de rosto no currículo.");
-        return;
-      }
-      var r = await sb.from("staff_profiles").upsert({
-        user_id: S.user.id,
-        display_name: box.querySelector("#pfName").value.trim() || "Profissional",
-        avatar_url: avatarVal,
-        resume_pdf_url: (box.querySelector("#pfPdfUrl").value || "").trim() || null,
-        location: box.querySelector("#pfLoc").value.trim() || null,
-        work_mode: box.querySelector("#pfMode").value,
-        experience_years: Math.max(0, parseInt(box.querySelector("#pfExp").value, 10) || 0),
-        availability: box.querySelector("#pfAvail").value.trim() || null,
-        skills: Array.from(selected),
-        bio: box.querySelector("#pfBio").value.trim() || null,
-        updated_at: new Date().toISOString()
-      }, { onConflict: "user_id" }).select().single();
-      if (r.error) { toast("Erro: " + r.error.message); return; }
-      S.profile = r.data;
-      box.querySelector("#pfMsg").textContent = "Currículo salvo!";
-      toast("Currículo salvo!");
-    };
-  }
-
-  function renderJobsSection(box) {
-    var origin = S.userCoords || { lat: -15.7942, lon: -47.8822 };
-    var list = S.jobs
-      .map(function (j) {
-        var bCoords = j.bars && j.bars.lat != null && j.bars.lon != null ? { lat: Number(j.bars.lat), lon: Number(j.bars.lon) } : null;
-        var km = bCoords ? haversineKm(origin, bCoords) : 9999;
-        return Object.assign({}, j, { _km: km });
-      })
-      .filter(function (j) {
-        if (S.jobRoleFilter !== "todas" && j.role_needed !== S.jobRoleFilter) return false;
-        if (S.jobTypeFilter !== "todas" && j.contract_type !== S.jobTypeFilter) return false;
-        if (S.jobLocFilter.trim() && !(j.location || "").toLowerCase().includes(S.jobLocFilter.trim().toLowerCase())) return false;
-        return true;
-      })
-      .sort(function (a, b) { return a._km - b._km; });
-
-    box.innerHTML =
-      '<div class="panel"><h2>Vagas disponíveis (mais próximas primeiro)</h2><div class="row">' +
-      '<div class="grow"><label>Localidade</label><input id="fltLoc" value="' + esc(S.jobLocFilter) + '" placeholder="Digite para sugestões próximas" autocomplete="off">' +
-      '<div class="loc-suggest-box" id="fltLocSug" style="display:none"></div></div>' +
-      '<div class="grow"><label>Vínculo</label><select id="fltType"><option value="todas" ' + (S.jobTypeFilter === "todas" ? "selected" : "") + '>Contrato e Freelance</option><option value="contrato" ' + (S.jobTypeFilter === "contrato" ? "selected" : "") + '>Contrato</option><option value="freelance" ' + (S.jobTypeFilter === "freelance" ? "selected" : "") + '>Freelance</option></select></div></div>' +
-      '<div class="chips" style="flex-wrap:wrap;overflow:visible;margin-top:10px">' + ["todas"].concat(JOB_ROLES).map(function (r) {
-        return '<span class="chip ' + (S.jobRoleFilter === r ? "on" : "") + '" data-jr="' + r + '">' + (r === "todas" ? "Todas funções" : esc(ROLE_LABELS[r] || r)) + "</span>";
-      }).join("") + '</div></div><div class="list" style="margin-top:12px">' +
-      (list.length ? list.map(function (j) {
-        var applied = S.myApps.some(function (a) { return a.job_id === j.id; });
-        var bName = j.bars ? j.bars.name + (j.bars.handle ? " (@" + j.bars.handle + ")" : "") : "Estabelecimento";
-        var distTxt = j._km < 9000 ? " · " + j._km.toFixed(1) + " km" : "";
-        return '<div style="align-items:flex-start"><div style="flex:1"><b>' + esc(j.title) + '</b> <span class="badge-warn">' + esc(j.contract_type) + " · " + esc(ROLE_LABELS[j.role_needed] || j.role_needed) + "</span>" +
-          '<br><span class="tag">' + esc(bName) + " · 📍 " + esc(j.location) + distTxt +
-          ' · <a href="' + esc(externalMapUrl(j.bars || { city: j.location })) + '" target="_blank" rel="noopener" style="color:var(--ac)">Abrir no mapa</a></span>' +
-          (j.description ? '<p class="mu" style="margin-top:6px">' + esc(j.description) + "</p>" : "") +
-          '</div><button type="button" class="b sm ' + (applied ? "g" : "") + '" ' + (applied ? "disabled" : 'data-apply="' + j.id + '"') + '>' + (applied ? "Candidatado" : "Candidatar-se") + "</button></div>";
-      }).join("") : '<p class="mu">Nenhuma vaga disponível no momento.</p>') + "</div>";
-
-    bindLocationSearchInput(box, "fltLoc", "fltLocSug", null, null, function (chosen) {
-      S.jobLocFilter = chosen.label;
-      renderJobsSection(box);
-    });
-    if (box.querySelector("#fltLoc")) box.querySelector("#fltLoc").oninput = function (e) { S.jobLocFilter = e.target.value; renderJobsSection(box); };
-    if (box.querySelector("#fltType")) box.querySelector("#fltType").onchange = function (e) { S.jobTypeFilter = e.target.value; renderJobsSection(box); };
-    box.querySelectorAll("[data-jr]").forEach(function (ch) { ch.onclick = function () { S.jobRoleFilter = ch.getAttribute("data-jr"); renderJobsSection(box); }; });
-    box.querySelectorAll("[data-apply]").forEach(function (btn) {
-      btn.onclick = async function () {
-        var r = await sb.from("job_applications").insert({ job_id: btn.getAttribute("data-apply"), applicant_id: S.user.id, message: "Currículo enviado." });
-        if (r.error) { toast("Erro: " + r.error.message); return; }
-        toast("Candidatura enviada!"); await loadJobsAndRequests(); renderJobsSection(box);
-      };
-    });
-  }
-
-  async function renderHandleServiceSection(box) {
-    var approvedReq = S.serviceReqs.find(function (x) { return x.status === "aprovada" || x.status === "aceita"; });
-    box.innerHTML =
-      '<div class="panel"><h2>Solicitar serviço para a loja</h2>' +
-      (approvedReq
-        ? '<p class="ok-txt">✓ Solicitação aprovada para ' + esc(approvedReq.bars ? approvedReq.bars.name : "a loja") + "!</p>"
-        : '<p class="mu">Preencha o @ da loja e a senha para enviar sua solicitação.</p>') +
-      '<label>@ da loja</label><input id="svcHandle" placeholder="Ex: @minha_casa_7228">' +
-      '<label>Senha da loja</label><input id="svcPass" placeholder="Senha gerada pelo dono ou gerente">' +
-      '<label>Função</label><select id="svcRole"><option value="barman">Barman</option><option value="garcom">Garçom</option><option value="cozinha">Cozinha</option><option value="caixa">Caixa</option></select>' +
-      '<button type="button" class="b full" id="svcSend" style="margin-top:12px">Enviar solicitação para a loja</button><p class="ok-txt" id="svcOk"></p><p class="err" id="svcErr"></p></div>';
-
-    box.querySelector("#svcSend").onclick = async function () {
-      box.querySelector("#svcErr").textContent = ""; box.querySelector("#svcOk").textContent = "";
-      var r = await sb.rpc("request_service_by_handle", { p_handle: box.querySelector("#svcHandle").value, p_password: box.querySelector("#svcPass").value, p_role: box.querySelector("#svcRole").value });
-      if (r.error) { box.querySelector("#svcErr").textContent = r.error.message; return; }
-      box.querySelector("#svcOk").textContent = "Solicitação enviada para a loja!";
-      await loadJobsAndRequests();
-    };
-  }
-
-  function storeStudioView(v) {
-    var b = S.bar;
-    v.innerHTML =
-      '<button type="button" class="b g sm" id="backMoreSt">← Voltar para Mais</button>' +
-      '<h1 style="margin-top:12px">Estúdio da Loja & Cardápio</h1>' +
-      '<p class="mu">Personalize a identidade livre da loja (como criação de emblema) e escolha o modo da área de drinks.</p>' +
-      '<div class="panel"><h2>1. Área central de drinks (modo de exibição)</h2>' +
-      '<label>Modo da área de drinks</label><select id="stMode">' + DISPLAY_MODES.map(function (m) {
-        return '<option value="' + m.id + '" ' + ((b.menu_display_mode || "grid-classic") === m.id ? "selected" : "") + '>' + esc(m.label) + "</option>";
-      }).join("") + "</select></div>" +
-      '<div class="panel"><h2>2. Identidade livre da loja (7+ itens combináveis)</h2>' +
-      '<label>1) Nome da loja</label><input id="stName" value="' + esc(b.name || "") + '">' +
-      '<label>2) Slogan da loja</label><input id="stSlogan" value="' + esc(b.slogan || "") + '" placeholder="Ex: Drinks autorais & boas noites">' +
-      '<div id="stLogoBox"></div>' +
-      '<label>4) Fonte do nome da loja</label><select id="stFont">' + NAME_FONTS.map(function (f) {
-        return '<option value="' + f.id + '" ' + ((b.name_font || "store-font-serif") === f.id ? "selected" : "") + '>' + esc(f.label) + "</option>";
-      }).join("") + "</select>" +
-      '<label>5) Desenho / Borda (estilo bandeira/brasão)</label><select id="stBorder">' + BORDER_STYLES.map(function (br) {
-        return '<option value="' + br.id + '" ' + ((b.crest_border || "crest-border-gold") === br.id ? "selected" : "") + '>' + esc(br.label) + "</option>";
-      }).join("") + "</select>" +
-      '<div class="row"><div class="grow"><label>6) Posição da logo</label><select id="stLogoPos">' + POS_OPTIONS.map(function (p) {
-        return '<option value="' + p.id + '" ' + ((b.logo_pos || "left") === p.id ? "selected" : "") + '>' + esc(p.label) + "</option>";
-      }).join("") + '</select></div>' +
-      '<div class="grow"><label>7) Posição do nome</label><select id="stNamePos">' + POS_OPTIONS.map(function (p) {
-        return '<option value="' + p.id + '" ' + ((b.name_pos || "left") === p.id ? "selected" : "") + '>' + esc(p.label) + "</option>";
-      }).join("") + "</select></div></div>" +
-      '<label>8) Localização da loja (mais próximas primeiro)</label>' +
-      '<input id="stCity" value="' + esc(b.city || "") + '" placeholder="Digite localização da loja" autocomplete="off">' +
-      '<div class="loc-suggest-box" id="stCitySug" style="display:none"></div>' +
-      '<input type="hidden" id="stLat" value="' + esc(b.lat != null ? b.lat : "") + '">' +
-      '<input type="hidden" id="stLon" value="' + esc(b.lon != null ? b.lon : "") + '">' +
-      '<div class="row"><div class="grow"><label>Paleta: Fundo</label><input type="color" id="stBg" value="' + esc(b.color_bg || "#0b0a0d") + '"></div>' +
-      '<div class="grow"><label>Paleta: Superfície</label><input type="color" id="stS1" value="' + esc(b.color_surface || "#141218") + '"></div>' +
-      '<div class="grow"><label>Paleta: Destaque</label><input type="color" id="stAc" value="' + esc(b.color_accent || "#e5a93c") + '"></div>' +
-      '<div class="grow"><label>Paleta: Texto</label><input type="color" id="stTx" value="' + esc(b.color_text || "#f6f1ea") + '"></div></div>' +
-      '<button type="button" class="b full" id="stSave" style="margin-top:16px">Salvar visual e modo do cardápio</button>' +
-      '<p class="ok-txt" id="stMsg"></p></div>' +
-      '<h2>Prévia da identidade</h2><div id="stPreview" style="margin-top:10px"></div>';
-
-    $("#stLogoBox").innerHTML = imageUploaderHtml("stLg", "3) Logo da loja (câmera ou galeria)", b.logo_url || "");
-    bindImageUploader(v, "stLg", "logos", function () { renderCrestPreview(); });
-    bindLocationSearchInput(v, "stCity", "stCitySug", "stLat", "stLon", function () { renderCrestPreview(); });
-
-    var alignMap = { left: "flex-start", center: "center", right: "flex-end" };
-    var renderCrestPreview = function () {
-      var nm = $("#stName").value.trim() || b.name;
-      var sl = $("#stSlogan").value.trim();
-      var lg = ($("#stLgUrl").value || "").trim() || ((window.BRAND && window.BRAND.logo) || "logo.png");
-      var fn = $("#stFont").value;
-      var brd = $("#stBorder").value;
-      var lp = alignMap[$("#stLogoPos").value] || "flex-start";
-      var np = alignMap[$("#stNamePos").value] || "flex-start";
-      var ct = $("#stCity").value.trim();
-
-      applyBarTheme({
-        color_bg: $("#stBg").value,
-        color_surface: $("#stS1").value,
-        color_accent: $("#stAc").value,
-        color_text: $("#stTx").value
-      });
-
-      $("#stPreview").innerHTML =
-        '<div class="crest-frame ' + esc(brd) + '">' +
-        '<div style="display:flex;justify-content:' + lp + '"><img class="logo big" src="' + esc(lg) + '" alt="Logo" onerror="this.style.display=\'none\'"></div>' +
-        '<div style="display:flex;justify-content:' + np + ';margin-top:10px"><h2 class="' + esc(fn) + '" style="margin:0">' + esc(nm) + "</h2></div>" +
-        (sl ? '<p class="mu" style="margin-top:6px">' + esc(sl) + "</p>" : "") +
-        (ct ? '<p class="tag" style="margin-top:6px">📍 ' + esc(ct) + ' · <a href="' + esc(externalMapUrl({ city: ct, lat: $("#stLat").value, lon: $("#stLon").value })) + '" target="_blank" rel="noopener" style="color:var(--ac)">Abrir no mapa externo</a></p>' : "") +
-        "</div>";
-    };
-
-    ["stName", "stSlogan", "stFont", "stBorder", "stLogoPos", "stNamePos", "stCity", "stBg", "stS1", "stAc", "stTx"].forEach(function (id) {
-      $("#" + id).oninput = renderCrestPreview;
-    });
-    renderCrestPreview();
-
-    $("#backMoreSt").onclick = function () { applyBarTheme(S.bar); moreView(v); };
-    $("#stSave").onclick = async function () {
-      var patch = {
-        name: $("#stName").value.trim() || b.name,
-        slogan: $("#stSlogan").value.trim() || null,
-        logo_url: ($("#stLgUrl").value || "").trim() || null,
-        name_font: $("#stFont").value,
-        crest_border: $("#stBorder").value,
-        logo_pos: $("#stLogoPos").value,
-        name_pos: $("#stNamePos").value,
-        menu_display_mode: $("#stMode").value,
-        city: $("#stCity").value.trim() || null,
-        lat: $("#stLat").value ? Number($("#stLat").value) : null,
-        lon: $("#stLon").value ? Number($("#stLon").value) : null,
-        color_bg: $("#stBg").value,
-        color_surface: $("#stS1").value,
-        color_accent: $("#stAc").value,
-        color_text: $("#stTx").value
-      };
-      var r = await writeBarSafe("update", patch, b.id);
-      if (r.error) { toast("Erro: " + r.error.message); return; }
-      S.bar = r.data;
-      applyBarTheme(S.bar);
-      $("#stMsg").textContent = "Visual e modo salvos!";
-      toast("Visual da loja salvo!");
-    };
-  }
-
-  function openQrModal() {
-    var o = document.createElement("div");
-    o.className = "ov";
-    o.innerHTML =
-      '<div class="w narrow"><button type="button" class="b g sm" id="closeQr">← Voltar</button>' +
-      '<h1 style="margin-top:14px">QR do cardápio</h1>' +
-      '<p class="mu">Escolha Geral ou uma mesa específica para gerar o link e o QR Code.</p>' +
-      '<div class="row" style="margin-top:12px">' +
-      '<div class="grow"><label>Mesa (opcional)</label><select id="qrMesaSel">' +
-      '<option value="">Cardápio geral</option>' +
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20].map(function (n) {
-        return '<option value="Mesa ' + n + '">Mesa ' + n + "</option>";
-      }).join("") +
-      '<option value="custom">Mesa personalizada...</option></select></div></div>' +
-      '<div id="qrCustomWrap" style="display:none"><label>Nome/número da mesa</label><input id="qrCustomInp" placeholder="Ex: Mesa 14 / Varanda 2"></div>' +
-      '<div style="text-align:center"><div class="qr-box"><img id="qrImg" width="196" height="196" alt="QR Code"><span class="tag" id="qrLabel" style="color:#222"></span></div></div>' +
-      '<p class="tag" id="qrLinkTxt" style="word-break:break-all;text-align:center"></p>' +
-      '<div class="row" style="margin-top:14px"><button type="button" class="b grow" id="qrCopyBtn">Copiar link</button>' +
-      '<a class="b g grow" id="qrOpenBtn" target="_blank" rel="noopener">Abrir cardápio</a></div></div>';
-
-    document.body.appendChild(o);
-    var sel = o.querySelector("#qrMesaSel");
-    var cWrap = o.querySelector("#qrCustomWrap");
-    var cInp = o.querySelector("#qrCustomInp");
-
-    var updateQr = function () {
-      var val = sel.value === "custom" ? (cInp.value || "").trim() : sel.value;
-      var url = menuUrl(S.bar.id, val);
-      o.querySelector("#qrLabel").textContent = val ? (S.bar.name + " · " + val) : S.bar.name;
-      o.querySelector("#qrLinkTxt").textContent = url;
-      o.querySelector("#qrOpenBtn").href = url;
-      o.querySelector("#qrImg").src = "https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=" + encodeURIComponent(url);
-    };
-
-    sel.onchange = function () {
-      cWrap.style.display = sel.value === "custom" ? "block" : "none";
-      updateQr();
-    };
-    cInp.oninput = updateQr;
-    o.querySelector("#closeQr").onclick = function () { o.remove(); };
-    o.querySelector("#qrCopyBtn").onclick = function () {
-      if (navigator.clipboard) navigator.clipboard.writeText(o.querySelector("#qrLinkTxt").textContent);
-      toast("Link do QR copiado!");
-    };
-    updateQr();
-  }
-
-  function openShakersModal() {
-    var o = document.createElement("div");
-    o.className = "ov";
-    o.innerHTML =
-      '<div class="w narrow"><button type="button" class="b g sm" id="closeSh">← Voltar</button>' +
-      '<h1 style="margin-top:14px">Coqueteleiras</h1>' +
-      '<p class="mu">Tamanhos e quantidade de coqueteleiras que você usa.</p>' +
-      '<div class="panel"><label>Quantidade de coqueteleiras</label><input id="shCount" type="number" min="1" max="50" value="' + esc(S.bar.shakers || 2) + '">' +
-      '<button type="button" class="b full" id="shSave" style="margin-top:14px">Salvar</button></div></div>';
-    document.body.appendChild(o);
-    o.querySelector("#closeSh").onclick = function () { o.remove(); };
-    o.querySelector("#shSave").onclick = async function () {
-      var cnt = Math.max(1, parseInt(o.querySelector("#shCount").value, 10) || 2);
-      var r = await writeBarSafe("update", { shakers: cnt }, S.bar.id);
-      if (!r.error && r.data) { S.bar = r.data; toast("Coqueteleiras salvas!"); }
-      o.remove();
-    };
-  }
-
-  function openCreateDrinkModal(editExisting) {
-    var o = document.createElement("div");
-    o.className = "ov";
-    o.innerHTML =
-      '<div class="w narrow"><button type="button" class="b g sm" id="closeDr">← Voltar</button>' +
-      '<h1 style="margin-top:14px">' + (editExisting ? "Editar / Criar receita" : "Criar drink") + "</h1>" +
-      (editExisting
-        ? '<label>Escolha uma receita para editar ou deixe em branco para nova</label><select id="pickRec"><option value="">— Nova receita —</option>' +
-          S.recipes.map(function (r) { return '<option value="' + r.id + '">' + esc(r.name) + "</option>"; }).join("") + "</select>"
-        : "") +
-      '<label>Nome do drink</label><input id="drName" placeholder="Ex: Gin Tônica de Hibisco">' +
-      '<label>Categoria</label><select id="drCat">' + CATS.map(function (c) { return '<option value="' + esc(c) + '">' + esc(c) + "</option>"; }).join("") + "</select>" +
-      '<div id="drImgBox"></div>' +
-      '<label>Ingredientes (um por linha)</label><textarea id="drIng" placeholder="Ex: 50ml Gin\n100ml Tônica\nGelo"></textarea>' +
-      '<label>Modo de preparo</label><textarea id="drPrep" placeholder="Como montar ou bater o drink"></textarea>' +
-      '<label>História do drink</label><textarea id="drStory" placeholder="Origem ou curiosidade"></textarea>' +
-      '<button type="button" class="b full" id="drSave" style="margin-top:14px">Salvar receita</button><p class="err" id="drErr"></p></div>';
-
-    document.body.appendChild(o);
-    o.querySelector("#drImgBox").innerHTML = imageUploaderHtml("drIm", "Foto do drink (câmera ou galeria)", "");
-    bindImageUploader(o, "drIm", "recipes");
-
-    if (o.querySelector("#pickRec")) {
-      o.querySelector("#pickRec").onchange = function (e) {
-        var rec = S.recipes.find(function (x) { return x.id === e.target.value; });
-        if (!rec) return;
-        o.querySelector("#drName").value = rec.name || "";
-        o.querySelector("#drCat").value = rec.category || CATS[0];
-        o.querySelector("#drImUrl").value = rec.image_url || "";
-        o.querySelector("#drImThumb").src = rec.image_url || ((window.BRAND && window.BRAND.logo) || "logo.png");
-        o.querySelector("#drIng").value = (rec.ingredients || []).map(function (i) { return i.n + (i.q ? " - " + i.q : ""); }).join("\n");
-        o.querySelector("#drPrep").value = rec.instructions || "";
-        o.querySelector("#drStory").value = rec.story || "";
-      };
-    }
-
-    o.querySelector("#closeDr").onclick = function () { o.remove(); };
-    o.querySelector("#drSave").onclick = async function () {
-      var name = o.querySelector("#drName").value.trim();
-      if (name.length < 2) { o.querySelector("#drErr").textContent = "Digite o nome do drink."; return; }
-      var ingLines = o.querySelector("#drIng").value.split("\n").map(function (s) { return s.trim(); }).filter(Boolean).map(function (line) {
-        var parts = line.split(" - ");
-        return { n: parts[0].trim(), q: (parts[1] || "").trim() };
-      });
-      var payload = {
-        name: name,
-        category: o.querySelector("#drCat").value,
-        image_url: (o.querySelector("#drImUrl").value || "").trim() || null,
-        ingredients: ingLines,
-        instructions: o.querySelector("#drPrep").value.trim() || null,
-        story: o.querySelector("#drStory").value.trim() || null
-      };
-      var selId = o.querySelector("#pickRec") ? o.querySelector("#pickRec").value : "";
-      var r = selId
-        ? await sb.from("recipes").update(payload).eq("id", selId).select().single()
-        : await sb.from("recipes").insert(payload).select().single();
-      if (r.error) { o.querySelector("#drErr").textContent = r.error.message; return; }
-      var idx = S.recipes.findIndex(function (x) { return x.id === r.data.id; });
-      if (idx >= 0) S.recipes[idx] = r.data; else S.recipes.push(r.data);
-      o.remove();
-      toast("Receita salva!");
-      if (S.tab === "recipes") paint();
-    };
-  }
-
-  function moreView(v) {
-    var open = S.bar.accepting_orders !== false;
-    v.innerHTML =
-      '<h1>Mais</h1>' +
-      '<p class="mu">' + esc(S.bar.name) +
-      (S.bar.city ? ' · <a href="' + esc(externalMapUrl(S.bar)) + '" target="_blank" rel="noopener" style="color:var(--ac);text-decoration:none">📍 ' + esc(S.bar.city) + " (Abrir mapa)</a>" : "") +
-      "</p>" +
-      '<div class="menu-row-list">' +
-      '<div class="menu-row-item" style="cursor:default">' +
-        '<div class="menu-row-text"><div class="menu-row-title">Receber pedidos</div><div class="menu-row-sub">' + (open ? "Ligado" : "Pausado") + '</div></div>' +
-        '<button type="button" class="b sm g" id="mToggleOrders">' + (open ? "Pausar" : "Ligar") + "</button>" +
-      "</div>" +
-      '<button type="button" class="menu-row-item" id="mQr">' +
-        '<div class="menu-row-text"><div class="menu-row-title">📱 QR do cardápio</div><div class="menu-row-sub">Para convidados ou clientes (inclui mesas)</div></div>' +
-        '<span class="menu-row-chev">›</span>' +
-      "</button>" +
-      '<button type="button" class="menu-row-item" id="mShakers">' +
-        '<div class="menu-row-text"><div class="menu-row-title">🍸 Coqueteleiras</div><div class="menu-row-sub">Tamanhos que você usa</div></div>' +
-        '<span class="menu-row-chev">›</span>' +
-      "</button>" +
-      '<button type="button" class="menu-row-item" id="mCreateDrink">' +
-        '<div class="menu-row-text"><div class="menu-row-title">➕ Criar drink</div><div class="menu-row-sub">Receita nova, com foto e história</div></div>' +
-        '<span class="menu-row-chev">›</span>' +
-      "</button>" +
-      '<button type="button" class="menu-row-item" id="mEditRecipe">' +
-        '<div class="menu-row-text"><div class="menu-row-title">✏️ Editar receita</div><div class="menu-row-sub">Importe, ajuste e atualize ou crie nova</div></div>' +
-        '<span class="menu-row-chev">›</span>' +
-      "</button>" +
-      '<button type="button" class="menu-row-item" id="mCashier">' +
-        '<div class="menu-row-text"><div class="menu-row-title">💵 Caixa</div><div class="menu-row-sub">Comandas, totais e fechamento</div></div>' +
-        '<span class="menu-row-chev">›</span>' +
-      "</button>" +
-      (canEditMenu()
-        ? '<button type="button" class="menu-row-item" id="mStudio">' +
-            '<div class="menu-row-text"><div class="menu-row-title">🎨 Visual da loja & Modo do cardápio</div><div class="menu-row-sub">Fonte, paleta, borda, posição e modo dos drinks</div></div>' +
-            '<span class="menu-row-chev">›</span>' +
-          "</button>"
-        : "") +
-      '<button type="button" class="menu-row-item" id="mCareers">' +
-        '<div class="menu-row-text"><div class="menu-row-title">💼 Vagas & Currículo</div><div class="menu-row-sub">' + (isManager() ? "Criar vagas e currículos por vaga" : "Vagas disponíveis, currículo (foto + PDF) e loja") + '</div></div>' +
-        '<span class="menu-row-chev">›</span>' +
-      "</button>" +
-      '<button type="button" class="menu-row-item" id="mMyBars">' +
-        '<div class="menu-row-text"><div class="menu-row-title">🏠 Meus bares</div><div class="menu-row-sub">Trocar ou criar bar</div></div>' +
-        '<span class="menu-row-chev">›</span>' +
-      "</button>" +
-      "</div>";
-
-    $("#mToggleOrders").onclick = async function () {
-      var r = await sb.from("bars").update({ accepting_orders: !open }).eq("id", S.bar.id).select().single();
-      if (!r.error && r.data) { S.bar = r.data; moreView(v); }
-    };
-    $("#mQr").onclick = openQrModal;
-    $("#mShakers").onclick = openShakersModal;
-    $("#mCreateDrink").onclick = function () { openCreateDrinkModal(false); };
-    $("#mEditRecipe").onclick = function () { openCreateDrinkModal(true); };
-    $("#mCashier").onclick = function () { S.tab = "cashier"; paint(); };
-    if ($("#mStudio")) $("#mStudio").onclick = function () { S.tab = "studio"; paint(); };
-    $("#mCareers").onclick = function () { S.tab = "careers"; paint(); };
-    $("#mMyBars").onclick = openSwitchBarModal;
-  }
-
-  init();
-})();
+}
